@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyNormalEdgeBridge } from '../src/video/edgeBridge.js';
+import { applyMicroEdgeFinish, applyNormalEdgeBridge } from '../src/video/edgeBridge.js';
 import { buildHybridRepairMask } from '../src/video/textureRepair.js';
 
 function image(width, height, fn) {
@@ -63,8 +63,32 @@ test('normal edge bridge reduces a dark diamond ring while preserving core detai
   const edgeMask = masks.edge.map((v) => v > 0.32);
   const coreMask = masks.core.map((v) => v > 0.55);
   assert.ok(repaired.edgeBridge.bridgedPixels > 0);
+  assert.ok(repaired.edgeBridge.finishingPixels >= 0);
   assert.ok(mae(repaired, clean, edgeMask) < mae(damaged, clean, edgeMask));
   assert.ok(mae(repaired, damaged, coreMask) < 2.0);
+});
+
+test('micro edge finish improves a thin residual ring without flattening the core', () => {
+  const width = 49, height = 49;
+  const alpha = diamondAlpha(width, height);
+  const masks = buildHybridRepairMask(alpha, width, height);
+  const clean = image(width, height, (x, y) => [58 + x * 2, 88 + Math.floor(y * 1.2), 118 + ((x + y) % 5)]);
+  const residual = image(width, height, (x, y) => {
+    const p = y * width + x;
+    const i = p * 4;
+    const edge = masks.edge[p] || 0;
+    const core = masks.core[p] || 0;
+    const halo = edge > 0.34 && core < 0.45 ? 18 : 0;
+    const texture = core > 0.55 ? ((x * 3 + y * 5) % 7) - 3 : 0;
+    return [clean.data[i] - halo + texture, clean.data[i + 1] - halo + texture, clean.data[i + 2] - halo + texture];
+  });
+
+  const finished = applyMicroEdgeFinish(residual, alpha, 0.72);
+  const edgeMask = masks.edge.map((v, p) => v > 0.34 && masks.core[p] < 0.45);
+  const coreMask = masks.core.map((v) => v > 0.55);
+  assert.ok(finished.edgeFinish.finishingPixels > 0);
+  assert.ok(mae(finished, clean, edgeMask) < mae(residual, clean, edgeMask));
+  assert.ok(mae(finished, residual, coreMask) < 0.75);
 });
 
 test('normal edge bridge backs off across a strong real structure', () => {
