@@ -1,5 +1,5 @@
 import { formatFileSize, validateVideoFile } from './video/file.js';
-import { QUICK_SAMPLE_COUNT, shouldAcceptQuickDetection } from './video/analysisPolicy.js';
+import { QUICK_SAMPLE_COUNT, QUICK_SCAN_FRACTION, shouldAcceptQuickDetection } from './video/analysisPolicy.js';
 
 const els = Object.fromEntries([
   'fileInput','chooseFileBtn','dropZone','fileInfo','sampleCount','minConfidence','analyzeBtn','detectResult',
@@ -23,13 +23,13 @@ function setBusy(value) {
   els.cleanBtn.disabled = !file || value;
   els.cancelBtn.disabled = !value;
   els.chooseFileBtn.disabled = value;
+  const analyzing = value && (String(activeTag || '').startsWith('quick:') || String(activeTag || '').startsWith('full:'));
+  els.analyzeBtn.classList.toggle('loading', analyzing);
 }
 
 function setStatus(text, progress = null) {
   els.status.textContent = text;
-  if (progress !== null) {
-    els.progressBar.style.width = `${Math.max(0, Math.min(100, progress * 100))}%`;
-  }
+  if (progress !== null) els.progressBar.style.width = `${Math.max(0, Math.min(100, progress * 100))}%`;
 }
 
 function setFileMessage(text, isError = false) {
@@ -57,11 +57,7 @@ function ensureWorker() {
 }
 
 function humanizeCandidate(candidateId = '') {
-  return String(candidateId)
-    .replace(/@.*$/, '')
-    .replace(/^veo-/, '')
-    .replace(/-/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return String(candidateId).replace(/@.*$/, '').replace(/^veo-/, '').replace(/-/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
 function drawRoi(canvas, roi) {
@@ -70,12 +66,9 @@ function drawRoi(canvas, roi) {
   canvas.width = roi.width;
   canvas.height = roi.height;
   const pixels = roi.data instanceof Uint8ClampedArray ? roi.data : new Uint8ClampedArray(roi.data);
-  const image = typeof ImageData !== 'undefined'
-    ? new ImageData(new Uint8ClampedArray(pixels), roi.width, roi.height)
-    : null;
-  if (image) {
-    ctx.putImageData(image, 0, 0);
-  } else {
+  const image = typeof ImageData !== 'undefined' ? new ImageData(new Uint8ClampedArray(pixels), roi.width, roi.height) : null;
+  if (image) ctx.putImageData(image, 0, 0);
+  else {
     const fallback = ctx.createImageData(roi.width, roi.height);
     fallback.data.set(pixels);
     ctx.putImageData(fallback, 0, 0);
@@ -92,7 +85,6 @@ function updateWatermarkBox(meta, position, uncertain = false) {
     els.watermarkBox.classList.add('hidden');
     return;
   }
-
   els.previewStage.style.aspectRatio = `${meta.width} / ${meta.height}`;
   els.watermarkBox.style.left = `${position.x / meta.width * 100}%`;
   els.watermarkBox.style.top = `${position.y / meta.height * 100}%`;
@@ -107,13 +99,9 @@ function seekPreview(timestamp) {
   const apply = () => {
     try {
       const duration = Number.isFinite(els.previewVideo.duration) ? els.previewVideo.duration : null;
-      const target = duration ? Math.min(Math.max(0, timestamp), Math.max(0, duration - 0.02)) : Math.max(0, timestamp);
-      els.previewVideo.currentTime = target;
-    } catch {
-      // Browser may reject seeking before metadata is ready; loadedmetadata will retry.
-    }
+      els.previewVideo.currentTime = duration ? Math.min(Math.max(0, timestamp), Math.max(0, duration - 0.02)) : Math.max(0, timestamp);
+    } catch {}
   };
-
   if (els.previewVideo.readyState >= 1) apply();
   else els.previewVideo.addEventListener('loadedmetadata', apply, { once: true });
 }
@@ -124,6 +112,7 @@ function renderDetection(result, { source = 'full' } = {}) {
   const meta = result?.metadata;
   const preview = result?.preview;
 
+  els.previewPanel.classList.toggle('portrait', Boolean(meta?.height > meta?.width));
   if (d?.position) {
     els.wmX.value = d.position.x;
     els.wmY.value = d.position.y;
@@ -133,7 +122,6 @@ function renderDetection(result, { source = 'full' } = {}) {
 
   els.detectResult.textContent = JSON.stringify({ metadata: meta, detection: d }, null, 2);
   els.previewPanel.classList.remove('hidden');
-
   if (preview?.original) drawRoi(els.originalZoom, preview.original);
   if (preview?.cleaned) drawRoi(els.cleanedZoom, preview.cleaned);
   seekPreview(preview?.timestamp);
@@ -141,14 +129,11 @@ function renderDetection(result, { source = 'full' } = {}) {
   const confidence = Number(d?.confidence) || 0;
   const match = Math.round(confidence * 100);
   const label = humanizeCandidate(d?.candidateId || 'Gemini Veo');
-
   if (d?.position) updateWatermarkBox(meta, d.position, !d.detected);
 
   if (d?.detected) {
     els.analysisSummary.textContent = `Auto-detected: Gemini Veo — ${label} (${match}% match)`;
-    els.previewNote.textContent = source === 'quick'
-      ? `Quick scan accepted with ${QUICK_SAMPLE_COUNT} sampled frames.`
-      : `Full scan confirmed the watermark across multiple frames.`;
+    els.previewNote.textContent = source === 'quick' ? `Quick scan accepted with ${QUICK_SAMPLE_COUNT} sampled frames.` : 'Full scan confirmed the watermark across multiple frames.';
     setStatus(`Detected: ${d.candidateId} confidence ${confidence.toFixed(3)}`, 1);
   } else {
     els.analysisSummary.textContent = `Possible watermark candidate (${match}% match)`;
@@ -162,11 +147,9 @@ function postInspect(kind, sampleCount) {
   const tag = `${kind}:${analysisSerial}`;
   activeTag = tag;
   setBusy(true);
-  els.analysisSummary.textContent = kind === 'quick'
-    ? 'Auto-detecting Gemini watermark…'
-    : 'Running full multi-frame scan…';
+  els.analysisSummary.textContent = kind === 'quick' ? 'Auto-detecting Gemini watermark…' : 'Running full multi-frame scan…';
   els.previewNote.textContent = kind === 'quick'
-    ? `Quick scan: ${sampleCount} frames. The full ${Number(els.sampleCount.value)}-frame scan runs only if needed.`
+    ? `Quick scan: ${sampleCount} frames over the first ${Math.round(QUICK_SCAN_FRACTION * 100)}% of the video.`
     : `Sampling up to ${sampleCount} frames for confirmation.`;
   setStatus(kind === 'quick' ? 'Quick scanning video…' : 'Sampling full video…', 0.01);
 
@@ -176,24 +159,19 @@ function postInspect(kind, sampleCount) {
     file,
     options: {
       sampleCount,
+      scanFraction: kind === 'quick' ? QUICK_SCAN_FRACTION : 1,
       minConfidence: Number(els.minConfidence.value),
       edgePolish: Number(els.edgePolish.value)
     }
   });
 }
 
-function startAutoAnalysis() {
-  postInspect('quick', QUICK_SAMPLE_COUNT);
-}
-
-function startFullAnalysis() {
-  postInspect('full', Number(els.sampleCount.value));
-}
+function startAutoAnalysis() { postInspect('quick', QUICK_SAMPLE_COUNT); }
+function startFullAnalysis() { postInspect('full', Number(els.sampleCount.value)); }
 
 function handleWorkerMessage(event) {
   const message = event.data || {};
   if (message.tag && activeTag && message.tag !== activeTag) return;
-
   if (message.type === 'progress') {
     setStatus(message.status || message.phase || 'Processing...', message.progress ?? null);
     if (String(message.tag || '').startsWith('quick:')) {
@@ -205,12 +183,10 @@ function handleWorkerMessage(event) {
     }
     return;
   }
-
   if (message.type === 'inspect-result') {
     const d = message.result?.detection;
     const minConfidence = Number(els.minConfidence.value);
     const isQuick = String(message.tag || '').startsWith('quick:');
-
     if (isQuick && !shouldAcceptQuickDetection(d, minConfidence)) {
       els.analysisSummary.textContent = 'Quick scan inconclusive — expanding analysis…';
       els.previewNote.textContent = `Quick confidence ${(Number(d?.confidence) || 0).toFixed(3)}. Starting full scan automatically.`;
@@ -218,12 +194,10 @@ function handleWorkerMessage(event) {
       setTimeout(startFullAnalysis, 30);
       return;
     }
-
     renderDetection(message.result, { source: isQuick ? 'quick' : 'full' });
     setBusy(false);
     return;
   }
-
   if (message.type === 'process-result') {
     if (outputUrl) URL.revokeObjectURL(outputUrl);
     const blob = new Blob([message.buffer], { type: 'video/mp4' });
@@ -236,14 +210,12 @@ function handleWorkerMessage(event) {
     setStatus(`Done. ${message.meta?.processedFrames ?? ''} frames processed; ${message.meta?.skippedFrames ?? 0} skipped.`, 1);
     return;
   }
-
   if (message.type === 'cancelled') {
     setBusy(false);
     els.analysisSummary.textContent = 'Analysis cancelled';
     setStatus('Cancelled.');
     return;
   }
-
   if (message.type === 'error') {
     setBusy(false);
     els.analysisSummary.textContent = 'Analysis failed';
@@ -262,6 +234,7 @@ function clearSelectedFile(reason = 'No video selected.') {
   els.previewVideo.removeAttribute('src');
   els.previewVideo.load();
   els.previewPanel.classList.add('hidden');
+  els.previewPanel.classList.remove('portrait');
   els.watermarkBox.classList.add('hidden');
   clearCanvas(els.originalZoom);
   clearCanvas(els.cleanedZoom);
@@ -274,19 +247,16 @@ function clearSelectedFile(reason = 'No video selected.') {
 
 function useFile(nextFile) {
   if (!nextFile) return;
-
   const validation = validateVideoFile(nextFile);
   if (!validation.ok) {
     clearSelectedFile(validation.reason);
     setStatus(validation.reason, 0);
     return;
   }
-
   analysisSerial++;
   resetWorker();
   file = nextFile;
   detection = null;
-
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = URL.createObjectURL(file);
   els.previewVideo.src = previewUrl;
@@ -295,16 +265,14 @@ function useFile(nextFile) {
   els.watermarkBox.classList.add('hidden');
   clearCanvas(els.originalZoom);
   clearCanvas(els.cleanedZoom);
-
   setFileMessage(`${file.name} - ${formatFileSize(file.size)} - ${validation.mime}`);
   els.detectResult.textContent = 'Video loaded. Automatic watermark analysis is starting…';
   els.analysisSummary.textContent = 'Preparing automatic analysis…';
-  els.previewNote.textContent = 'The interface paints first, then detection starts in a Web Worker.';
+  els.previewNote.textContent = 'Detection starts in a Web Worker while the page stays responsive.';
   els.downloadBtn.classList.add('disabled');
   els.downloadBtn.setAttribute('aria-disabled', 'true');
   setBusy(false);
   setStatus('Video loaded. Starting auto-detect…', 0);
-
   requestAnimationFrame(() => setTimeout(startAutoAnalysis, 40));
 }
 
@@ -313,72 +281,38 @@ els.chooseFileBtn.addEventListener('click', () => {
   els.fileInput.value = '';
   els.fileInput.click();
 });
-
 els.fileInput.addEventListener('change', () => {
   const selected = els.fileInput.files?.[0];
   if (selected) useFile(selected);
 });
-
-for (const type of ['dragenter', 'dragover']) {
-  els.dropZone.addEventListener(type, (event) => {
-    event.preventDefault();
-    els.dropZone.classList.add('drag');
-  });
-}
-for (const type of ['dragleave', 'drop']) {
-  els.dropZone.addEventListener(type, (event) => {
-    event.preventDefault();
-    els.dropZone.classList.remove('drag');
-  });
-}
+for (const type of ['dragenter', 'dragover']) els.dropZone.addEventListener(type, (event) => { event.preventDefault(); els.dropZone.classList.add('drag'); });
+for (const type of ['dragleave', 'drop']) els.dropZone.addEventListener(type, (event) => { event.preventDefault(); els.dropZone.classList.remove('drag'); });
 els.dropZone.addEventListener('drop', (event) => useFile(event.dataTransfer?.files?.[0]));
-
 els.analyzeBtn.addEventListener('click', () => {
   if (!file || busy) return;
   analysisSerial++;
   startFullAnalysis();
 });
-
 els.cleanBtn.addEventListener('click', () => {
   if (!file || busy) return;
-  setBusy(true);
   activeTag = `process:${analysisSerial}`;
+  setBusy(true);
   setStatus('Starting export…', 0.01);
-
   const detectedPosition = detection?.detection?.detected ? detection.detection.position : null;
   ensureWorker().postMessage({
-    type: 'process',
-    tag: activeTag,
-    file,
+    type: 'process', tag: activeTag, file,
     options: {
       sampleCount: Number(els.sampleCount.value),
       minConfidence: Number(els.minConfidence.value),
-      manual: els.manualMode.checked ? {
-        x: Number(els.wmX.value),
-        y: Number(els.wmY.value),
-        size: Number(els.wmSize.value)
-      } : null,
-      detectedRegion: !els.manualMode.checked && detectedPosition ? {
-        x: detectedPosition.x,
-        y: detectedPosition.y,
-        size: detectedPosition.width
-      } : null,
-      alphaGain: Number(els.alphaGain.value),
-      adaptiveAlpha: els.adaptiveAlpha.checked,
-      temporalStabilize: els.temporalStabilize.checked,
-      edgePolish: Number(els.edgePolish.value),
-      forceCleanup: els.forceCleanup.checked,
-      lowGate: Number(els.lowGate.value),
-      bitrate: Number(els.bitrate.value) * 1_000_000
+      manual: els.manualMode.checked ? { x: Number(els.wmX.value), y: Number(els.wmY.value), size: Number(els.wmSize.value) } : null,
+      detectedRegion: !els.manualMode.checked && detectedPosition ? { x: detectedPosition.x, y: detectedPosition.y, size: detectedPosition.width } : null,
+      alphaGain: Number(els.alphaGain.value), adaptiveAlpha: els.adaptiveAlpha.checked,
+      temporalStabilize: els.temporalStabilize.checked, edgePolish: Number(els.edgePolish.value),
+      forceCleanup: els.forceCleanup.checked, lowGate: Number(els.lowGate.value), bitrate: Number(els.bitrate.value) * 1_000_000
     }
   });
 });
-
-els.cancelBtn.addEventListener('click', () => {
-  worker?.postMessage({ type: 'cancel' });
-  setStatus('Cancelling…');
-});
-
+els.cancelBtn.addEventListener('click', () => { worker?.postMessage({ type: 'cancel' }); setStatus('Cancelling…'); });
 window.addEventListener('beforeunload', () => {
   if (outputUrl) URL.revokeObjectURL(outputUrl);
   if (previewUrl) URL.revokeObjectURL(previewUrl);
