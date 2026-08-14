@@ -22,6 +22,7 @@ import {
   pasteRegion
 } from './textureRepair.js';
 import { applyBackgroundAtlas, buildBackgroundAtlas, summarizeAtlas } from './multiFrameRepair.js';
+import { applyNormalEdgeBridge } from './edgeBridge.js';
 
 const DEFAULT_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
 const REPAIR_PADDING = 14;
@@ -166,12 +167,15 @@ function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, h
     }
   }
 
+  repaired = applyNormalEdgeBridge(repaired, paddedAlpha, 0.90);
+
   return {
     original,
     cleaned: cropRegion(repaired, inner.offsetX, inner.offsetY, inner.width, inner.height),
     repairedPadded: repaired,
     paddedAlpha,
-    atlasSummary
+    atlasSummary,
+    edgeBridge: repaired.edgeBridge || null
   };
 }
 
@@ -204,7 +208,8 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     timestamp: frame.timestamp,
     original: repaired.original,
     cleaned: repaired.cleaned,
-    atlas: repaired.atlasSummary
+    atlas: repaired.atlasSummary,
+    edgeBridge: repaired.edgeBridge
   };
 }
 
@@ -378,6 +383,8 @@ export async function cleanVideo(file, options = {}) {
   let history = [];
   let atlasFrames = 0;
   let atlasDonorsPeak = 0;
+  let bridgeFrames = 0;
+  let bridgePixelsPeak = 0;
   const lowGate = Number.isFinite(options.lowGate) ? options.lowGate : 0.025;
   const fallbackDuration = 1 / Math.max(1, metadata.frameRate);
 
@@ -419,6 +426,10 @@ export async function cleanVideo(file, options = {}) {
             atlasFrames++;
             atlasDonorsPeak = Math.max(atlasDonorsPeak, repaired.atlasSummary.donorCount);
           }
+          if (repaired.edgeBridge?.bridgedPixels > 0) {
+            bridgeFrames++;
+            bridgePixelsPeak = Math.max(bridgePixelsPeak, repaired.edgeBridge.bridgedPixels);
+          }
           if (options.temporalStabilize !== false) {
             processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.45);
           }
@@ -456,7 +467,7 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.15',
+        version: '1.0.16',
         position,
         alphaGain: previousGain,
         processedFrames,
@@ -467,6 +478,9 @@ export async function cleanVideo(file, options = {}) {
           paddedTexture: true,
           multiFrameAtlas: options.temporalStabilize !== false,
           hybridCoreRing: true,
+          normalEdgeBridge: true,
+          bridgeFrames,
+          bridgePixelsPeak,
           atlasFrames,
           atlasDonorsPeak,
           historyLimit: MAX_ATLAS_HISTORY
