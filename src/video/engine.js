@@ -21,9 +21,11 @@ import {
   expandedRegion,
   pasteRegion
 } from './textureRepair.js';
+import { applyBackgroundAtlas, buildBackgroundAtlas, summarizeAtlas } from './multiFrameRepair.js';
 
 const DEFAULT_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
 const REPAIR_PADDING = 14;
+const MAX_ATLAS_HISTORY = 8;
 
 function createCanvas(width, height) {
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height);
@@ -129,7 +131,7 @@ function cropImageData(imageData, position) {
   return { width, height, data };
 }
 
-function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, previousPadded = null) {
+function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, history = [], allowMaskedDonors = false) {
   const original = cropRegion(paddedOriginal, inner.offsetX, inner.offsetY, inner.width, inner.height);
   let cleaned = inverseAlphaRestore(original, alphaMap, gain);
   cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
@@ -144,14 +146,32 @@ function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, p
     inner.offsetY
   );
   let repaired = pasteRegion(paddedOriginal, cleaned, inner.offsetX, inner.offsetY);
-  repaired = applyPaddedTextureRepair(repaired, paddedAlpha, 0.72);
-  if (previousPadded) repaired = applyTemporalDonorRepair(repaired, paddedOriginal, previousPadded, paddedAlpha, 0.66);
+  repaired = applyPaddedTextureRepair(repaired, paddedAlpha, 0.68);
+
+  let atlasSummary = { donorCount: 0, supportedPixels: 0, meanConfidence: 0 };
+  if (history.length) {
+    const atlas = buildBackgroundAtlas(paddedOriginal, history, paddedAlpha, {
+      maxHistory: MAX_ATLAS_HISTORY,
+      maxShift: 9,
+      minImprovement: 0.06,
+      allowMaskedDonors
+    });
+    atlasSummary = summarizeAtlas(atlas);
+    const minimumDonors = allowMaskedDonors ? 3 : 2;
+    if (atlasSummary.donorCount >= minimumDonors && atlasSummary.supportedPixels >= Math.max(24, inner.width)) {
+      repaired = applyBackgroundAtlas(repaired, paddedAlpha, atlas, allowMaskedDonors ? 0.88 : 0.94);
+    } else if (!allowMaskedDonors) {
+      const previousPadded = history[history.length - 1];
+      if (previousPadded) repaired = applyTemporalDonorRepair(repaired, paddedOriginal, previousPadded, paddedAlpha, 0.52);
+    }
+  }
 
   return {
     original,
     cleaned: cropRegion(repaired, inner.offsetX, inner.offsetY, inner.width, inner.height),
     repairedPadded: repaired,
-    paddedAlpha
+    paddedAlpha,
+    atlasSummary
   };
 }
 
@@ -161,8 +181,10 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
   const frame = frames[index];
   const expanded = expandedRegion(detection.position, frame.imageData.width, frame.imageData.height, REPAIR_PADDING);
   const padded = cropImageData(frame.imageData, expanded);
-  const previousFrame = index > 0 ? frames[index - 1] : null;
-  const previousPadded = previousFrame ? cropImageData(previousFrame.imageData, expanded) : null;
+  const history = frames
+    .slice(0, index)
+    .map((item) => cropImageData(item.imageData, expanded))
+    .slice(-MAX_ATLAS_HISTORY);
   const inner = {
     offsetX: expanded.offsetX,
     offsetY: expanded.offsetY,
@@ -175,12 +197,14 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     detection.alphaMap,
     detection.alphaGain ?? 1,
     edgePolish,
-    previousPadded
+    history,
+    false
   );
   return {
     timestamp: frame.timestamp,
     original: repaired.original,
-    cleaned: repaired.cleaned
+    cleaned: repaired.cleaned,
+    atlas: repaired.atlasSummary
   };
 }
 
@@ -351,6 +375,9 @@ export async function cleanVideo(file, options = {}) {
   let skippedFrames = 0;
   let previousGain = requestedGain;
   let previousTemporal = null;
+  let history = [];
+  let atlasFrames = 0;
+  let atlasDonorsPeak = 0;
   const lowGate = Number.isFinite(options.lowGate) ? options.lowGate : 0.025;
   const fallbackDuration = 1 / Math.max(1, metadata.frameRate);
 
@@ -374,6 +401,7 @@ export async function cleanVideo(file, options = {}) {
           if (shotChanged) {
             previousGain = Number.NaN;
             previousTemporal = null;
+            history = [];
           }
           const gain = frameGain(original, alphaMap, requestedGain, previousGain, options.adaptiveAlpha !== false, score);
           previousGain = gain;
@@ -383,18 +411,26 @@ export async function cleanVideo(file, options = {}) {
             alphaMap,
             gain,
             options.edgePolish ?? 0.35,
-            options.temporalStabilize !== false ? previousTemporal?.paddedOriginal : null
+            options.temporalStabilize !== false ? history : [],
+            options.temporalStabilize !== false
           );
           let processed = repaired.cleaned;
+          if (repaired.atlasSummary?.donorCount >= 3) {
+            atlasFrames++;
+            atlasDonorsPeak = Math.max(atlasDonorsPeak, repaired.atlasSummary.donorCount);
+          }
           if (options.temporalStabilize !== false) {
-            processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.55);
+            processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.45);
           }
           const finalPadded = pasteRegion(repaired.repairedPadded, processed, inner.offsetX, inner.offsetY);
           ctx.putImageData(toImageDataLike(finalPadded), expanded.x, expanded.y);
           previousTemporal = { original, processed, paddedOriginal };
+          history.push(finalPadded);
+          if (history.length > MAX_ATLAS_HISTORY) history.shift();
         } else {
           skippedFrames++;
           previousTemporal = null;
+          history = [];
         }
       } finally {
         sample.close();
@@ -420,13 +456,20 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.13',
+        version: '1.0.14',
         position,
         alphaGain: previousGain,
         processedFrames,
         skippedFrames,
         audio: audioResult,
-        repair: { padding: REPAIR_PADDING, paddedTexture: true, temporalDonor: options.temporalStabilize !== false },
+        repair: {
+          padding: REPAIR_PADDING,
+          paddedTexture: true,
+          multiFrameAtlas: options.temporalStabilize !== false,
+          atlasFrames,
+          atlasDonorsPeak,
+          historyLimit: MAX_ATLAS_HISTORY
+        },
         detection: analysis?.detection || (detectedRegion ? { detected: true, position } : null)
       }
     };
