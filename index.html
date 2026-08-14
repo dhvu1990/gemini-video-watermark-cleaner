@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
-  <title>Gemini Video Watermark Cleaner v1.0.16</title>
+  <title>Gemini Video Watermark Cleaner v1.0.17</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
@@ -12,8 +12,8 @@
     <header class="hero">
       <p class="eyebrow">LOCAL-FIRST VIDEO TOOL</p>
       <h1>Gemini Video Watermark Cleaner</h1>
-      <p>Automatic multi-frame detection, calibrated inverse-alpha restoration, detail-preserving core recovery, normal-direction edge bridge repair, and local MP4 export.</p>
-      <div class="badges"><span>v1.0.16</span><span>Auto detect</span><span>Residual-gated full scan</span><span>Hybrid core/ring restore</span><span>Normal edge bridge</span><span>Multi-frame atlas</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
+      <p>Automatic multi-frame detection, subpixel alpha registration, detail-preserving core recovery, normal-direction edge bridge repair, and local MP4 export.</p>
+      <div class="badges"><span>v1.0.17</span><span>Auto detect</span><span>Subpixel alpha</span><span>Residual buckets</span><span>Hybrid core/ring restore</span><span>Normal edge bridge</span><span>Multi-frame atlas</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
     </header>
 
     <section class="panel">
@@ -76,9 +76,18 @@
             <label>Shape scale<input id="calShape" value="-" readonly /></label>
             <label>Edge gain<input id="calEdgeGain" value="-" readonly /></label>
           </div>
-          <div class="row">
+          <div class="row triple">
+            <label>Offset X (px)<input id="calOffsetX" value="-" readonly /></label>
+            <label>Offset Y (px)<input id="calOffsetY" value="-" readonly /></label>
             <label>Edge boost<input id="calEdgeBoost" value="-" readonly /></label>
-            <label>Residual score<input id="calResidual" value="-" readonly /></label>
+          </div>
+          <div class="row">
+            <label>Total residual<input id="calResidual" value="-" readonly /></label>
+            <label>Edge residual<input id="calResidualEdge" value="-" readonly /></label>
+          </div>
+          <div class="row">
+            <label>Low-body residual<input id="calResidualLow" value="-" readonly /></label>
+            <label>High-body residual<input id="calResidualHigh" value="-" readonly /></label>
           </div>
         </div>
         <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive body gain with calibration clamp</label>
