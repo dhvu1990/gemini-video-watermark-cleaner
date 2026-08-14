@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.6** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.8** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -8,41 +8,10 @@
 
 This repository was designed after studying two MIT-licensed projects:
 
-- `ishara-madu/gemini-watermark-remover` - excellent lightweight browser UX and deployment model.
-- `GargantuaX/gemini-watermark-remover` - deeper detector/export architecture, multi-frame logic, alpha-profile research, confidence gating, tests and video quality work.
+- `ishara-madu/gemini-watermark-remover` - lightweight browser UX and deployment ideas.
+- `GargantuaX/gemini-watermark-remover` - deeper video detection, alpha-profile, residual-cleanup and export research.
 
-The goal here is not to mirror either codebase. It is a smaller independent video-focused implementation that keeps the strongest stable ideas and avoids making experimental ML denoise a required dependency.
-
-See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices, [`PROJECT_LOG.md`](./PROJECT_LOG.md) for the project history, [`logs/`](./logs/) for detailed incident/regression logs, and [`DEPLOYMENT.md`](./DEPLOYMENT.md) for web deployment.
-
-## Features
-
-- 100% local video processing in the browser.
-- Robust local video selection using MIME **or** `.mp4/.mov/.m4v/.webm` extension fallback.
-- Explicit **Choose video** button plus drag-and-drop.
-- Immediate file-validation feedback beside the selector.
-- **Automatic watermark detection immediately after file selection.**
-- Progressive auto-detect: 4-frame quick scan over the first 25% of the video, with automatic fallback to the normal 12-frame full scan only when confidence is insufficient.
-- Full-frame browser preview with the detected watermark bounding box overlaid on the video.
-- Side-by-side **ZOOMED ORIGINAL** and **ZOOMED CLEANED** ROI previews generated in the Worker.
-- Fast detect metadata path that skips packet-rate statistics until export actually needs them.
-- Reuses an already detected region during export instead of repeating full watermark detection.
-- Known 1080p, 720p and portrait Veo watermark candidates.
-- Local coordinate refinement around the best known candidate.
-- Spatial + gradient correlation detector.
-- Fail-closed detection threshold with explicit **Force cleanup** override.
-- Manual X/Y/size override for unseen or relocated layouts.
-- Inverse-alpha restoration rather than whole-box blur.
-- Adaptive alpha with per-frame correction step cap.
-- Scene-cut reset so alpha/temporal history does not leak into a new shot.
-- Masked edge polish for residual diamond edges.
-- Temporal correction stabilization on low-motion pixels.
-- MP4 export through MediaBunny + WebCodecs.
-- Encoded audio passthrough when the input codec is compatible with MP4 output.
-- BT.709 color metadata on encoded video.
-- Web Worker processing, progress reporting and cancellation.
-- Unit tests and GitHub Actions CI.
-- GitHub Pages production deployment workflow.
+The implementation is independently structured, video-focused and local-first. See [`RESEARCH.md`](./RESEARCH.md), [`ATTRIBUTION.md`](./ATTRIBUTION.md), [`PROJECT_LOG.md`](./PROJECT_LOG.md), [`logs/`](./logs/) and [`DEPLOYMENT.md`](./DEPLOYMENT.md).
 
 ## Production site
 
@@ -50,7 +19,31 @@ See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.m
 https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 ```
 
-GitHub Pages was enabled and the deployment workflow completed successfully end-to-end on 2026-08-14. Each push to `main` runs validation/build and deploys the generated `dist/` artifact.
+## v1.0.8 highlights
+
+- Automatic detection immediately after selecting a video.
+- Faster progressive quick scan: **3 frames over the first 18%** of the video, with a stricter acceptance threshold and automatic full-scan fallback when needed.
+- Visible spinner on the analysis button while quick/full analysis is running.
+- More compact portrait preview so the full-frame video is visually balanced with the two ROI zoom cards.
+- Detector geometry remains unchanged from the validated v1.0.7 path.
+- Cleanup now adds a lightweight browser-side **low-alpha edge enhancement** for the cleanup mask only.
+- After inverse-alpha restoration, an **edge-aware residual footprint cleanup** targets the remaining diamond outline while using a luma structure guard to reduce damage to real image detail.
+- The same cleanup path is used by `ZOOMED CLEANED` and full-video export, so the preview is a better representation of the expected result.
+- No ML/FDnCNN dependency is required for this release.
+
+## Main features
+
+- 100% local video processing in the browser; no media upload.
+- MP4/MOV/M4V/WebM file selection with MIME/extension fallback.
+- Full-frame preview with detected Gemini bounding box.
+- `ZOOMED ORIGINAL` and `ZOOMED CLEANED` ROI previews generated in a Web Worker.
+- Known 1080p, 720p and portrait Veo geometry candidates with local coordinate refinement.
+- Spatial + gradient correlation detector.
+- Fail-closed confidence threshold plus manual override/force-cleanup fallback.
+- Inverse-alpha restoration, adaptive per-frame alpha, scene-cut reset and temporal stabilization.
+- Residual edge/footprint cleanup for the visible diamond border.
+- MediaBunny/WebCodecs AVC MP4 export with compatible encoded-audio passthrough.
+- Progress reporting, cancellation, tests, CI and GitHub Pages deployment.
 
 ## Quick start
 
@@ -62,13 +55,57 @@ npm run setup:alpha
 npm run dev
 ```
 
-Open the local Vite URL and choose/drop a Gemini/Veo video. v1.0.6 automatically starts a quick watermark scan after the UI has painted. When confidence is high enough, the detected box plus Original/Cleaned zoom previews appear immediately. If the quick scan is not conclusive, the app automatically expands to the configured full scan. Use **Re-analyze full video** only when you explicitly want to run the full detector again.
+Choose or drop a Gemini/Veo video. Analysis starts automatically. A high-confidence quick result is shown immediately; otherwise the app expands to the configured full scan. Use **Re-analyze full video** only when you explicitly want another full detector pass.
 
 ### Why `npm run setup:alpha`?
 
-The repository keeps third-party alpha-profile data traceable instead of hand-copying a huge generated payload into the initial source. The setup command downloads three alpha profiles from a **pinned** MIT-licensed upstream commit and generates `src/vendor/alphaPayload.js`.
+The setup command downloads three alpha profiles from a pinned MIT-licensed upstream commit and generates `src/vendor/alphaPayload.js`. The runtime itself remains local after the assets are bundled. If the sync command is not run, the application falls back to a procedural alpha template, which is less accurate for real Gemini/Veo material.
 
-If the sync command is not run, the app still starts with a procedural fallback alpha template, but the pinned alpha data is recommended for real Gemini/Veo videos.
+## Detection pipeline
+
+```text
+Local video
+  -> file validation
+  -> local browser preview
+  -> Worker quick scan: 3 frames from first 18%
+  -> catalog candidates + spatial/gradient scoring
+  -> local coordinate refinement
+  -> strict quick-result gate
+  -> show box + ROI previews OR automatically run full 12-frame scan
+```
+
+## Cleanup/export pipeline
+
+```text
+Detected region
+  -> per-frame confidence gate
+  -> inverse-alpha restoration
+  -> cleanup-only low-alpha edge enhancement
+  -> masked edge polish
+  -> residual footprint cleanup + structure guard
+  -> temporal correction stabilization
+  -> WebCodecs AVC encode
+  -> encoded audio passthrough
+  -> MediaBunny MP4 mux
+```
+
+## Supported layout priors
+
+- 1920x1080: 72 px standard and inset layouts.
+- 1280x720: 48 px standard/inset plus compact layout.
+- 1080x1920 portrait: 72 px standard/inset.
+- 720x1280 portrait: standard/relocated/compact variants.
+- Other sizes: projected candidates from reference geometry.
+
+## Tuning guide
+
+- **Full scan frames**: 12 is the normal fallback. Increase for unusually long or highly edited videos.
+- **Min confidence**: default 0.12; quick acceptance is deliberately stricter.
+- **Alpha gain**: normally keep the detected value.
+- **Edge polish**: default 0.35. v1.0.8 also applies bounded residual footprint cleanup, so avoid raising this aggressively unless testing shows it is needed.
+- **Adaptive alpha**: recommended.
+- **Temporal stabilization**: recommended for static/slow backgrounds.
+- **Manual override / Force cleanup**: only when automatic detection is uncertain.
 
 ## Production build
 
@@ -80,96 +117,15 @@ npm test
 npm run build
 ```
 
-The resulting `dist/` folder is static and can be hosted on GitHub Pages, Cloudflare Pages, Netlify, an internal web server, or any static hosting service.
-
-## GitHub Pages deployment
-
-`.github/workflows/deploy-pages.yml` runs on every push to `main` and can also be started manually.
-
-The workflow:
-
-1. checks out the repository,
-2. installs Node.js 22,
-3. installs dependencies,
-4. synchronizes the pinned alpha profiles,
-5. runs syntax checks,
-6. runs unit tests,
-7. builds the Vite production bundle,
-8. uploads `dist/` as the Pages artifact,
-9. deploys it to the `github-pages` environment.
-
-The current Vite setting uses `base: './'`, so generated JS/CSS/worker asset URLs remain relative and work under the repository project path without hard-coding the repository name.
-
-See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the smoke-test checklist and deployment troubleshooting.
-
-## Default detection pipeline
-
-```text
-Local MP4
-  -> file validation
-  -> browser video preview
-  -> Worker quick scan: 4 frames from first 25%
-  -> catalog candidates
-  -> spatial + gradient scoring
-  -> local position refinement
-  -> if confidence is strong: show box + ROI previews
-  -> otherwise: automatic full 12-frame scan
-```
-
-## Export pipeline
-
-```text
-Detected region
-  -> full-frame decode
-  -> confidence gate per frame
-  -> inverse-alpha restoration
-  -> masked edge polish
-  -> temporal correction stabilization
-  -> WebCodecs AVC encode
-  -> encoded audio passthrough
-  -> MediaBunny MP4 mux
-```
-
-## Supported layout priors
-
-The catalog currently includes priors for:
-
-- 1920x1080: 72 px standard and inset layouts.
-- 1280x720: 48 px standard/inset plus a 44 px compact layout.
-- 1080x1920 portrait: 72 px standard/inset.
-- 720x1280 portrait: 48 px standard/relocated plus compact variants.
-- Other sizes: projected candidates from the 1920x1080 reference geometry.
-
-The detector locally searches around the best prior instead of assuming the anchor is exact.
-
-## Tuning guide
-
-- **Full scan frames**: 12 is the normal fallback. Raise toward 18-24 for longer videos with fades or scene changes.
-- **Min confidence**: default 0.12. Quick-scan acceptance is deliberately stricter than this threshold.
-- **Alpha gain**: normally leave at the detected value after analysis.
-- **Edge polish**: default 0.35. Increase carefully if a thin diamond outline remains.
-- **Adaptive alpha**: recommended; changes are capped frame-to-frame to reduce flicker.
-- **Temporal stabilization**: recommended for static/slow backgrounds; it is motion-gated.
-- **Force cleanup**: use only after visually confirming the target region.
-- **Manual override**: use when Gemini/Veo changes watermark placement or the detector is uncertain.
+The generated `dist/` directory is static and is deployed by `.github/workflows/deploy-pages.yml` on pushes to `main`.
 
 ## Current limitations
 
-- The browser path currently exports AVC/H.264 MP4 and re-encodes video; it is not lossless.
-- Audio is copied only when the source audio codec can be placed directly into MP4; unsupported audio is omitted rather than transcoded in-browser.
-- Detection is optimized for the visible Gemini/Veo diamond-style overlay and known layout families. Future Google changes may require catalog/alpha updates.
-- The fallback procedural alpha template is approximate; run `npm run setup:alpha` for the pinned reference profiles.
-- ML/FDnCNN denoise is intentionally not a v1 default. A masked, benchmarked optional backend can be added later without changing the main restoration architecture.
-
-## Development
-
-```bash
-npm run check
-npm test
-npm run build
-```
-
-CI repeats the same checks after synchronizing the pinned alpha profiles.
+- Video is re-encoded to AVC/H.264 MP4; export is not lossless.
+- Audio is copied only when its encoded codec can be placed directly into MP4.
+- Future Gemini/Veo watermark geometry or alpha changes may require catalog/profile updates.
+- Residual cleanup is intentionally lightweight and structure-guarded; highly textured backgrounds may still show some artifacts.
+- ML/FDnCNN remains an optional future quality tier rather than a default dependency.
 
 ## Responsible use
 

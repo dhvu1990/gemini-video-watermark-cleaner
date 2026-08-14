@@ -1,6 +1,13 @@
+import { enhanceAlphaEdges } from './alpha.js';
+
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function luma(data, idx) { return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]; }
+function smoothstep(edge0, edge1, value) {
+  if (edge0 === edge1) return value >= edge1 ? 1 : 0;
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
 
 export function inverseAlphaRestore(roi, alphaMap, gain = 1) {
   const out = new Uint8ClampedArray(roi.data);
@@ -36,18 +43,78 @@ function alphaEdgeMap(alphaMap, width, height) {
   return out;
 }
 
-export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
+export function applyResidualFootprintCleanup(imageData, alphaMap, strength = 0.65) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0) return imageData;
   const { width, height, data } = imageData;
   const edge = alphaEdgeMap(alphaMap, width, height);
   const out = new Uint8ClampedArray(data);
 
+  for (let y = 3; y < height - 3; y++) {
+    for (let x = 3; x < width - 3; x++) {
+      const p = y * width + x;
+      const a = alphaMap[p] || 0;
+      let localMax = a;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          localMax = Math.max(localMax, alphaMap[(y + dy) * width + x + dx] || 0);
+        }
+      }
+      if (localMax < 0.012) continue;
+
+      const idx = p * 4;
+      const gx = luma(data, (y * width + x + 1) * 4) - luma(data, (y * width + x - 1) * 4);
+      const gy = luma(data, ((y + 1) * width + x) * 4) - luma(data, ((y - 1) * width + x) * 4);
+      const structureGuard = smoothstep(24, 92, Math.hypot(gx, gy));
+      const edgeBand = clamp(
+        edge[p] * 0.65 + smoothstep(0.012, 0.12, localMax) * (1 - smoothstep(0.10, 0.34, a)) * 0.7,
+        0,
+        1
+      );
+      const mask = edgeBand * safeStrength * (1 - structureGuard * 0.72);
+      if (mask < 0.05) continue;
+
+      const sums = [0, 0, 0];
+      let weightSum = 0;
+      for (let dy = -3; dy <= 3; dy++) {
+        for (let dx = -3; dx <= 3; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const np = (y + dy) * width + x + dx;
+          const na = alphaMap[np] || 0;
+          const lowAlpha = 1 - smoothstep(0.01, 0.18, na);
+          const dist2 = dx * dx + dy * dy;
+          const spatial = Math.exp(-dist2 / 8);
+          const w = spatial * (0.12 + lowAlpha * 0.88);
+          const ni = np * 4;
+          sums[0] += data[ni] * w;
+          sums[1] += data[ni + 1] * w;
+          sums[2] += data[ni + 2] * w;
+          weightSum += w;
+        }
+      }
+      if (weightSum <= 0) continue;
+      const blend = Math.min(0.58, mask * 0.58);
+      for (let c = 0; c < 3; c++) {
+        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
+      }
+    }
+  }
+  return { width, height, data: out };
+}
+
+export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
+  const safeStrength = clamp(Number(strength) || 0, 0, 1);
+  if (safeStrength <= 0) return imageData;
+  const { width, height, data } = imageData;
+  const cleanupAlpha = width >= 40 && width === height ? enhanceAlphaEdges(alphaMap, width, 0.045) : new Float32Array(alphaMap);
+  const edge = alphaEdgeMap(cleanupAlpha, width, height);
+  const out = new Uint8ClampedArray(data);
+
   for (let y = 1; y < height - 1; y++) {
     for (let x = 1; x < width - 1; x++) {
       const p = y * width + x;
       const mask = edge[p] * safeStrength;
-      if (mask < 0.05 || (alphaMap[p] || 0) < 0.01) continue;
+      if (mask < 0.05 || (cleanupAlpha[p] || 0) < 0.01) continue;
       const idx = p * 4;
       const centerLuma = luma(data, idx);
       const sums = [0, 0, 0];
@@ -69,12 +136,13 @@ export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
       if (weightSum <= 0) continue;
       const blend = Math.min(0.34, mask * 0.28);
       for (let c = 0; c < 3; c++) {
-        const smooth = sums[c] / weightSum;
-        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + smooth * blend);
+        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
       }
     }
   }
-  return { width, height, data: out };
+
+  const polished = { width, height, data: out };
+  return applyResidualFootprintCleanup(polished, cleanupAlpha, Math.min(0.85, 0.45 + safeStrength * 0.55));
 }
 
 export function stabilizeCorrection(original, processed, previous, alphaMap, strength = 0.7) {
@@ -82,7 +150,6 @@ export function stabilizeCorrection(original, processed, previous, alphaMap, str
   if (previous.original.width !== original.width || previous.original.height !== original.height) return processed;
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   const out = new Uint8ClampedArray(processed.data);
-
   for (let p = 0; p < alphaMap.length; p++) {
     const alpha = alphaMap[p] || 0;
     if (alpha < 0.025) continue;
@@ -103,8 +170,6 @@ export function stabilizeCorrection(original, processed, previous, alphaMap, str
 }
 
 export function toImageDataLike(value) {
-  if (typeof ImageData !== 'undefined' && !(value instanceof ImageData)) {
-    return new ImageData(value.data, value.width, value.height);
-  }
+  if (typeof ImageData !== 'undefined' && !(value instanceof ImageData)) return new ImageData(value.data, value.width, value.height);
   return value;
 }
