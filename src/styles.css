@@ -53,7 +53,11 @@ button:disabled, .disabled { opacity: .55; cursor: not-allowed; pointer-events: 
 .result { margin: 14px 0 0; white-space: pre-wrap; min-height: 82px; max-height: 430px; background: #080d18; border: 1px solid #26344f; color: #bcd1ff; border-radius: 10px; padding: 12px; overflow: auto; }
 .progress { height: 9px; border-radius: 99px; overflow: hidden; background: #0a0f1c; margin: 16px 0 8px; border: 1px solid #283654; }
 .progress > div { width: 0%; height: 100%; background: linear-gradient(90deg, #8eb7ff, #d8e7ff); transition: width .15s linear; }
+.result-preview { overflow: hidden; }
+.result-heading { margin-bottom: 14px; }
+.result-video-wrap { width: min(100%, 760px); margin: 0 auto; border: 1px solid #33466f; border-radius: 14px; overflow: hidden; background: #050812; box-shadow: inset 0 0 0 1px rgba(255,255,255,.02); }
+.result-video-wrap video { display: block; width: 100%; max-height: 72vh; background: #050812; object-fit: contain; }
 footer { font-size: 12px; padding: 12px 4px 0; line-height: 1.6; }
-@media (max-width: 860px) { .preview-layout, .preview-panel.portrait .preview-layout { grid-template-columns: 1fr; } .preview-main { width: min(100%, 520px); margin: 0 auto; } .zoom-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); } .preview-heading { display: block; } .preview-heading .muted { max-width: none; text-align: left; margin-top: 8px; } }
+@media (max-width: 860px) { .preview-layout, .preview-panel.portrait .preview-layout { grid-template-columns: 1fr; } .preview-main { width: min(100%, 520px); margin: 0 auto; } .zoom-stack { grid-template-columns: repeat(2, minmax(0, 1fr)); } .preview-heading { display: block; } .preview-heading .muted { max-width: none; text-align: left; margin-top: 8px; } .result-video-wrap { width: min(100%, 560px); } }
 @media (max-width: 760px) { .shell { width: min(100% - 20px, 1080px); padding-top: 28px; } .grid, .row, .triple { grid-template-columns: 1fr; } .panel { padding: 16px; } }
-@media (max-width: 520px) { .zoom-stack { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .zoom-stack { grid-template-columns: 1fr; } .result-video-wrap video { max-height: 62vh; } }

@@ -5,7 +5,8 @@ const els = Object.fromEntries([
   'fileInput','chooseFileBtn','dropZone','fileInfo','sampleCount','minConfidence','analyzeBtn','detectResult',
   'manualMode','wmX','wmY','wmSize','alphaGain','edgePolish','adaptiveAlpha','temporalStabilize',
   'forceCleanup','bitrate','lowGate','cleanBtn','cancelBtn','downloadBtn','progressBar','status',
-  'previewPanel','previewStage','previewVideo','watermarkBox','analysisSummary','previewNote','originalZoom','cleanedZoom'
+  'previewPanel','previewStage','previewVideo','watermarkBox','analysisSummary','previewNote','originalZoom','cleanedZoom',
+  'resultPanel','resultVideo','resultSummary'
 ].map((id) => [id, document.getElementById(id)]));
 
 let file = null;
@@ -41,6 +42,19 @@ function resetWorker() {
   if (worker) worker.terminate();
   worker = null;
   activeTag = null;
+}
+
+function resetOutputPreview({ revoke = true } = {}) {
+  if (revoke && outputUrl) URL.revokeObjectURL(outputUrl);
+  outputUrl = null;
+  els.resultVideo.pause();
+  els.resultVideo.removeAttribute('src');
+  els.resultVideo.load();
+  els.resultPanel.classList.add('hidden');
+  els.resultSummary.textContent = 'The cleaned MP4 will appear here after export completes.';
+  els.downloadBtn.removeAttribute('href');
+  els.downloadBtn.classList.add('disabled');
+  els.downloadBtn.setAttribute('aria-disabled', 'true');
 }
 
 function ensureWorker() {
@@ -199,15 +213,22 @@ function handleWorkerMessage(event) {
     return;
   }
   if (message.type === 'process-result') {
-    if (outputUrl) URL.revokeObjectURL(outputUrl);
+    resetOutputPreview();
     const blob = new Blob([message.buffer], { type: 'video/mp4' });
     outputUrl = URL.createObjectURL(blob);
     els.downloadBtn.href = outputUrl;
     els.downloadBtn.download = `${file.name.replace(/\.[^.]+$/, '')}-cleaned.mp4`;
     els.downloadBtn.classList.remove('disabled');
     els.downloadBtn.setAttribute('aria-disabled', 'false');
+    els.resultVideo.src = outputUrl;
+    els.resultVideo.load();
+    els.resultPanel.classList.remove('hidden');
+    const processed = message.meta?.processedFrames ?? '';
+    const skipped = message.meta?.skippedFrames ?? 0;
+    els.resultSummary.textContent = `${processed} frames processed; ${skipped} skipped. Review the cleaned video here before downloading.`;
     setBusy(false);
-    setStatus(`Done. ${message.meta?.processedFrames ?? ''} frames processed; ${message.meta?.skippedFrames ?? 0} skipped.`, 1);
+    setStatus(`Done. ${processed} frames processed; ${skipped} skipped.`, 1);
+    els.resultPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
     return;
   }
   if (message.type === 'cancelled') {
@@ -229,6 +250,7 @@ function clearSelectedFile(reason = 'No video selected.') {
   resetWorker();
   file = null;
   detection = null;
+  resetOutputPreview();
   if (previewUrl) URL.revokeObjectURL(previewUrl);
   previewUrl = null;
   els.previewVideo.removeAttribute('src');
@@ -240,8 +262,6 @@ function clearSelectedFile(reason = 'No video selected.') {
   clearCanvas(els.cleanedZoom);
   setFileMessage(reason, reason !== 'No video selected.');
   els.detectResult.textContent = 'Waiting for video...';
-  els.downloadBtn.classList.add('disabled');
-  els.downloadBtn.setAttribute('aria-disabled', 'true');
   setBusy(false);
 }
 
@@ -255,6 +275,7 @@ function useFile(nextFile) {
   }
   analysisSerial++;
   resetWorker();
+  resetOutputPreview();
   file = nextFile;
   detection = null;
   if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -269,8 +290,6 @@ function useFile(nextFile) {
   els.detectResult.textContent = 'Video loaded. Automatic watermark analysis is starting…';
   els.analysisSummary.textContent = 'Preparing automatic analysis…';
   els.previewNote.textContent = 'Detection starts in a Web Worker while the page stays responsive.';
-  els.downloadBtn.classList.add('disabled');
-  els.downloadBtn.setAttribute('aria-disabled', 'true');
   setBusy(false);
   setStatus('Video loaded. Starting auto-detect…', 0);
   requestAnimationFrame(() => setTimeout(startAutoAnalysis, 40));
@@ -295,6 +314,7 @@ els.analyzeBtn.addEventListener('click', () => {
 });
 els.cleanBtn.addEventListener('click', () => {
   if (!file || busy) return;
+  resetOutputPreview();
   activeTag = `process:${analysisSerial}`;
   setBusy(true);
   setStatus('Starting export…', 0.01);
