@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildProceduralFallbackAlpha } from '../src/video/alpha.js';
-import { inverseAlphaRestore } from '../src/video/restore.js';
+import { applyDirectionalEdgeReconstruction, inverseAlphaRestore } from '../src/video/restore.js';
 
 function makeBackground(size) {
   const data = new Uint8ClampedArray(size * size * 4);
@@ -39,6 +39,10 @@ function meanAbsRgbError(a, b) {
   return sum / count;
 }
 
+function lowAlphaBand(alpha) {
+  return alpha.map((value) => value >= 0.015 && value <= 0.22);
+}
+
 test('inverse alpha restoration approximately reconstructs original pixels', () => {
   const size = 48;
   const alpha = buildProceduralFallbackAlpha(size);
@@ -46,4 +50,21 @@ test('inverse alpha restoration approximately reconstructs original pixels', () 
   const watermarked = addWhiteAlphaOverlay(original, alpha);
   const restored = inverseAlphaRestore(watermarked, alpha, 1);
   assert.ok(meanAbsRgbError(original, restored) < 1.1);
+});
+
+test('directional reconstruction reduces a synthetic dark residual edge band', () => {
+  const size = 48;
+  const alpha = buildProceduralFallbackAlpha(size);
+  const original = makeBackground(size);
+  const damaged = { width: size, height: size, data: new Uint8ClampedArray(original.data) };
+  const band = lowAlphaBand(alpha);
+  for (let p = 0; p < band.length; p++) {
+    if (!band[p]) continue;
+    const i = p * 4;
+    damaged.data[i] = Math.max(0, damaged.data[i] - 34);
+    damaged.data[i + 1] = Math.max(0, damaged.data[i + 1] - 34);
+    damaged.data[i + 2] = Math.max(0, damaged.data[i + 2] - 34);
+  }
+  const repaired = applyDirectionalEdgeReconstruction(damaged, alpha, 0.9);
+  assert.ok(meanAbsRgbError(original, repaired) < meanAbsRgbError(original, damaged));
 });
