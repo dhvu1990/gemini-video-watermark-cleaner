@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.13 - 2026-08-14
+
+- Added a residual-quality gate to progressive analysis: quick scans with calibration residual score above 18 automatically expand to the configured full scan even when position confidence is high.
+- Added a 14 px padded ROI around the detected watermark so cleanup can use real surrounding texture instead of operating only inside the 72x72 watermark box.
+- Added padded spatial texture reconstruction using horizontal, vertical and diagonal clean-alpha anchors with disagreement guards.
+- Added temporal donor reconstruction that estimates small background translation from clean padded-border pixels and reuses previous-frame pixels only when the shifted donor lies outside the watermark footprint.
+- Temporal donor repair skips static/weak-motion frames rather than copying the same watermarked coordinate.
+- Detection preview and full-video export now share the same padded reconstruction path.
+- Added tests for residual-gated quick scans, padded texture repair, temporal shift estimation and safe temporal-donor fallback.
+- Updated export metadata and visible UI to v1.0.13.
+- Detailed journal: `logs/2026-08-14-v1.0.13-padded-temporal-reconstruction.md`.
+
+## 1.0.12 - 2026-08-14
+
+- Added directional background reconstruction after inverse-alpha, edge polish and residual-footprint cleanup.
+- Added one-sided outward repair for closed watermark outlines where only the exterior side reaches clean background.
+- Added a 3x3 local structure guard to preserve strong real edges crossing the watermark ROI.
+- Added regression coverage for reducing a synthetic residual halo while preserving a strong real structure.
+- CI required several corrective iterations before all 25 tests and the production build passed; the full failure/fix history is recorded in `logs/2026-08-14-v1.0.12-directional-background-reconstruction.md`.
+
 ## 1.0.11 - 2026-08-14
 
 - Fixed the real-video v1.0.10 regression where calibration could over-darken the watermark center while leaving the diamond outline visible.
