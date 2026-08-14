@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.7 - 2026-08-14
+
+- Fixed the full-frame Auto Detection Preview bounding box being visually offset from the actual Gemini watermark on portrait videos.
+- Root cause: the preview stage was assigned the source aspect ratio but also capped with `max-height: 680px`, which distorted the stage coordinate system while the overlay still used source-frame percentages.
+- Removed the conflicting height cap and made the preview video absolutely fill a stage whose geometry is controlled only by the source aspect ratio.
+- Detector coordinates, zoomed original ROI, zoomed cleaned ROI, and cleanup geometry are unchanged; this release fixes preview rendering alignment only.
+- Bumped the visible application and package version to `v1.0.7`.
+
 ## 1.0.6 - 2026-08-14
 
 - Changed the default UX from manual **Analyze watermark** to automatic detection immediately after selecting a video.
@@ -27,7 +35,7 @@
 - Recorded successful v1.0.3 CI validation on PR #4 using `actions/checkout@v7` and `actions/setup-node@v7`.
 - Recorded successful squash merge of v1.0.3 into `main` as commit `0e0fd31fa048b84ce99e8f6a5fc062ed7316b26b`.
 - Recorded the first production Pages deployment attempt: install, alpha sync, syntax checks, 5/5 tests, and Vite build all passed.
-- Recorded the deployment blocker: `actions/configure-pages@v6` returned `Get Pages site failed` because GitHub Pages was not yet enabled/configured for the repository.
+- Recorded the deployment blocker: `actions/configure-pages@v6` returned `Get Pages site failed` because GitHub Pages is not yet enabled/configured for the repository.
 - Documented that automatic Pages enablement requires a token other than the default `GITHUB_TOKEN`; the repository therefore kept a one-time manual Settings -> Pages -> GitHub Actions enablement step.
 - GitHub Pages was subsequently enabled and deployment run `31775076589` completed successfully end-to-end before v1.0.4 was merged.
 - v1.0.4 was squash-merged to `main` as commit `250508579ad56fc458fdd38caf0a444e9417a179`.
@@ -35,7 +43,7 @@
 ## 1.0.3 - 2026-08-14
 
 - Added a GitHub Pages production deployment workflow that builds, validates, uploads, and deploys the Vite `dist/` artifact from `main`.
-- Added `DEPLOYMENT.md` with the exact Pages enablement checklist, privacy notes, smoke-test procedure, regression evidence checklist, and troubleshooting guidance.
+- Added `DEPLOYMENT.md` with the exact Pages enablement checklist, privacy notes, smoke-test procedure, regression evidence checklist, troubleshooting guidance.
 - Updated CI from `actions/checkout@v4` / `actions/setup-node@v4` to current major v7 releases.
 - Kept Vite `base: './'` because relative assets are appropriate for the GitHub Pages project subpath.
 - Documented that a private repository does not automatically make a Pages site private and that private Pages access control requires an eligible organization/enterprise setup.
