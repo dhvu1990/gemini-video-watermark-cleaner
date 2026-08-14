@@ -74,6 +74,44 @@ export function cropRegion(image, offsetX, offsetY, width, height) {
   return { width, height, data };
 }
 
+function alphaGradient(alphaMap, width, height) {
+  const gradient = new Float32Array(alphaMap.length);
+  let maxGradient = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      const gx = (alphaMap[p + 1] || 0) - (alphaMap[p - 1] || 0);
+      const gy = (alphaMap[p + width] || 0) - (alphaMap[p - width] || 0);
+      const value = Math.hypot(gx, gy);
+      gradient[p] = value;
+      maxGradient = Math.max(maxGradient, value);
+    }
+  }
+  if (maxGradient > 0) {
+    for (let p = 0; p < gradient.length; p++) gradient[p] /= maxGradient;
+  }
+  return gradient;
+}
+
+export function buildHybridRepairMask(alphaMap, width, height) {
+  const edge = new Float32Array(alphaMap.length);
+  const core = new Float32Array(alphaMap.length);
+  const feather = new Float32Array(alphaMap.length);
+  const gradient = alphaGradient(alphaMap, width, height);
+
+  for (let p = 0; p < alphaMap.length; p++) {
+    const a = alphaMap[p] || 0;
+    if (a <= 0.004) continue;
+    const lowAlphaRing = smoothstep(0.006, 0.06, a) * (1 - smoothstep(0.18, 0.38, a));
+    const gradientRing = gradient[p] || 0;
+    edge[p] = clamp(gradientRing * 0.82 + lowAlphaRing * 0.64, 0, 1);
+    core[p] = smoothstep(0.24, 0.50, a) * (1 - edge[p] * 0.86);
+    feather[p] = clamp(smoothstep(0.06, 0.24, a) * (1 - core[p]) * (0.30 + edge[p] * 0.70), 0, 1);
+  }
+
+  return { edge, core, feather };
+}
+
 function anchorAlong(image, alphaMap, x, y, dx, dy, sign, maxRadius = 22) {
   for (let distance = 1; distance <= maxRadius; distance++) {
     const sx = x + dx * distance * sign;
@@ -107,6 +145,7 @@ export function applyPaddedTextureRepair(image, alphaMap, strength = 0.72) {
   if (safeStrength <= 0 || alphaMap.length !== image.width * image.height) return image;
   const out = new Uint8ClampedArray(image.data);
   const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
+  const hybridMask = buildHybridRepairMask(alphaMap, image.width, image.height);
 
   for (let y = 1; y < image.height - 1; y++) {
     for (let x = 1; x < image.width - 1; x++) {
@@ -121,9 +160,12 @@ export function applyPaddedTextureRepair(image, alphaMap, strength = 0.72) {
       if (!best) continue;
 
       const disagreementGuard = smoothstep(24, 100, best.disagreement);
-      const bodyWeight = 0.22 + 0.78 * smoothstep(0.012, 0.36, alpha);
-      const blend = Math.min(0.84, safeStrength * bodyWeight * best.support * (1 - disagreementGuard * 0.82));
-      if (blend < 0.05) continue;
+      const edgeWeight = hybridMask.edge[p] || 0;
+      const featherWeight = hybridMask.feather[p] || 0;
+      const coreWeight = hybridMask.core[p] || 0;
+      const regionWeight = clamp(edgeWeight * 0.94 + featherWeight * 0.45 + coreWeight * 0.035, 0, 1);
+      const blend = Math.min(0.80, safeStrength * regionWeight * best.support * (1 - disagreementGuard * 0.82));
+      if (blend < 0.035) continue;
       const idx = p * 4;
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(image.data[idx + c] * (1 - blend) + best.rgb[c] * blend);
     }
@@ -173,6 +215,7 @@ export function applyTemporalDonorRepair(processed, currentOriginal, previousOri
 
   const out = new Uint8ClampedArray(processed.data);
   const support = clamp(shift.improvement * 2.4, 0, 1);
+  const hybridMask = buildHybridRepairMask(alphaMap, processed.width, processed.height);
   for (let y = 0; y < processed.height; y++) {
     for (let x = 0; x < processed.width; x++) {
       const p = y * processed.width + x;
@@ -185,7 +228,12 @@ export function applyTemporalDonorRepair(processed, currentOriginal, previousOri
       if ((alphaMap[donorP] || 0) > 0.008) continue;
       const idx = p * 4;
       const donor = donorP * 4;
-      const blend = Math.min(0.88, safeStrength * support * (0.35 + 0.65 * smoothstep(0.012, 0.34, alpha)));
+      const edgeWeight = hybridMask.edge[p] || 0;
+      const featherWeight = hybridMask.feather[p] || 0;
+      const coreWeight = hybridMask.core[p] || 0;
+      const regionWeight = clamp(edgeWeight * 0.96 + featherWeight * 0.50 + coreWeight * 0.025, 0, 1);
+      const blend = Math.min(0.84, safeStrength * support * regionWeight);
+      if (blend < 0.035) continue;
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(processed.data[idx + c] * (1 - blend) + previousOriginal.data[donor + c] * blend);
     }
   }

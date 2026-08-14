@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.15 - 2026-08-14
+
+- Changed cleanup from whole-footprint reconstruction to a hybrid core/ring strategy after real-video validation showed v1.0.14 blurred high-frequency texture inside the watermark more than v1.0.12.
+- Added an explicit hybrid repair mask with three soft regions: high-alpha detail-preserving core, feather transition, and aggressive edge ring.
+- Padded spatial texture repair now applies strongly to the edge ring, moderately to the feather region, and only minimally to the core.
+- Temporal donor reconstruction now follows the same region weighting so donor pixels cannot flatten the watermark center simply because motion alignment is confident.
+- Multi-frame atlas blending is now constrained by an independent hybrid alpha/gradient mask; even high-confidence donor consensus is nearly disabled in the core and remains strongest at low-alpha/gradient edges.
+- Kept inverse-alpha restoration and calibrated Body gain as the primary reconstruction path for core detail.
+- Added regression tests that require core pixel changes to remain small while edge-ring pixels receive substantially stronger atlas correction.
+- Added regression tests that verify spatial repair improves a damaged edge footprint without flattening the high-alpha core.
+- Kept detector/catalog geometry, residual-gated full scan, padded ROI, scene-cut reset, Web Worker pipeline and local export architecture unchanged.
+- Visible package/UI version bumped to v1.0.15.
+- Detailed journal: `logs/2026-08-14-v1.0.15-hybrid-detail-edge-cleanup.md`.
+
 ## 1.0.14 - 2026-08-14
 
 - Added a bounded multi-frame background atlas for watermark reconstruction after full detection/calibration.

@@ -456,7 +456,7 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.14',
+        version: '1.0.15',
         position,
         alphaGain: previousGain,
         processedFrames,
@@ -466,6 +466,7 @@ export async function cleanVideo(file, options = {}) {
           padding: REPAIR_PADDING,
           paddedTexture: true,
           multiFrameAtlas: options.temporalStabilize !== false,
+          hybridCoreRing: true,
           atlasFrames,
           atlasDonorsPeak,
           historyLimit: MAX_ATLAS_HISTORY
