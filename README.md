@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.1** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.2** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 

@@ -146,17 +146,91 @@ Changes:
 
 - Removed `cache: npm` from `.github/workflows/ci.yml`.
 - Bumped package version from `1.0.0` to `1.0.1`.
-- Updated `CHANGELOG.md`.
+- Updated `CHANGELOG.md` and `README.md`.
 - Added this `PROJECT_LOG.md` as the permanent project execution log.
 
-Commits so far:
+Commits created during the v1.0.1 branch work included:
 
 - `edb13a7ea7da3b534045369b9d5b6220de24ab84` - `fix: remove npm cache requirement from CI`
 - `dcc74abd7ef5ee9ecf6e6d7e232f26ed8f960bb9` - `chore: bump version to v1.0.1`
 - `e39cd303d99bd762eca53799cbe948b06e9417d1` - `docs: record v1.0.1 changes`
+- `20e6783e5997a930a5e95bfa3671b4e62c42d466` - added `PROJECT_LOG.md`
+- `9c940b51d9ad3f37b50d111177a1b5fc86ec11ba` - final v1.0.1 branch head after README/version documentation update
 
-### Current status
+PR #1 was closed without merge because its CI failure belonged to v1.0.0. A replacement PR was created for the corrected version:
 
-- v1.0.0 PR #1 is still open and unmerged because its CI failed.
-- v1.0.1 contains the CI correction and project-log additions.
-- Next action: create/update a PR for v1.0.1, confirm GitHub Actions proceeds past setup-node and runs install, alpha sync, checks, tests, and build. Merge to `main` only after CI is green or after any remaining failure is fully investigated and documented.
+- PR #2
+- Title: `fix: stabilize CI and add project log v1.0.1`
+- Base: `main`
+- Head: `agent/v1.0.1`
+- Head SHA before merge: `9c940b51d9ad3f37b50d111177a1b5fc86ec11ba`
+
+### Successful CI verification for PR #2
+
+Workflow:
+
+- Name: `CI`
+- Run ID: `31770108096`
+- Run number: `32`
+- Job: `test-build`
+- Job ID: `94674059330`
+- Result: SUCCESS
+
+Verified successful steps:
+
+1. Set up job - PASS
+2. `actions/checkout@v4` - PASS
+3. `actions/setup-node@v4` with Node.js 22 - PASS
+4. `npm install --no-audit --no-fund` - PASS
+5. `npm run setup:alpha` - PASS
+6. `npm run check` - PASS
+7. `npm test` - PASS
+8. `npm run build` - PASS
+
+This is the first fully dependency-backed production validation of the repository on GitHub infrastructure. It confirms the pinned alpha synchronization and Vite production build both work in an environment with normal network access.
+
+### Merge of v1.0.1
+
+After the successful CI result was confirmed, PR #2 was marked ready for review and merged using squash.
+
+Merge result:
+
+- PR: #2
+- Merge method: squash
+- Merged: yes
+- Main commit: `1f0556623bc9d6ce318cad2ae533a286ac60cf89`
+- Commit title: `fix: stabilize CI and add project log v1.0.1`
+- Expected/verified head SHA at merge: `9c940b51d9ad3f37b50d111177a1b5fc86ec11ba`
+
+At this point `main` contains the complete working implementation and the corrected CI configuration. v1.0.1 is the first version that has passed the entire install -> alpha sync -> syntax -> tests -> production build pipeline on GitHub Actions.
+
+## 2026-08-14 - v1.0.2 release-state logging
+
+Branch:
+
+- `agent/v1.0.2`
+- Based on `main` after the successful v1.0.1 squash merge.
+
+Purpose:
+
+- Preserve the successful CI and merge result in the permanent project log.
+- Follow the project rule that every repository edit increments the version rather than mutating the prior version in place.
+
+Changes:
+
+- Bumped `package.json` from `1.0.1` to `1.0.2`.
+- Updated `CHANGELOG.md` with the successful CI and merge state.
+- Updated README version banner to `v1.0.2`.
+- Updated this log with the completed CI and merge details.
+
+Branch commits so far:
+
+- `584618a05581fa4cf7e0772e1bd9a6f3eb661649` - `chore: bump version to v1.0.2`
+- `457acfd241c4aab812963a8e6ecf5a23bfa10090` - `docs: record v1.0.2 release state`
+- `0adc48f28f909f0d45fec5690671b633ecf3014d` - `docs: bump README to v1.0.2`
+
+### Current state and next action
+
+- `main`: working v1.0.1 implementation, CI green, full build validated.
+- `agent/v1.0.2`: documentation/version follow-up that records the successful release state.
+- Next action: validate v1.0.2 CI, merge it into `main`, then move to browser deployment/real-video regression testing and only promote additional cleanup backends or watermark variants after representative tests exist.
