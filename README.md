@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.5** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.6** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -21,7 +21,12 @@ See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.m
 - Robust local video selection using MIME **or** `.mp4/.mov/.m4v/.webm` extension fallback.
 - Explicit **Choose video** button plus drag-and-drop.
 - Immediate file-validation feedback beside the selector.
-- 12-frame multi-frame analysis by default.
+- **Automatic watermark detection immediately after file selection.**
+- Progressive auto-detect: 4-frame quick scan over the first 25% of the video, with automatic fallback to the normal 12-frame full scan only when confidence is insufficient.
+- Full-frame browser preview with the detected watermark bounding box overlaid on the video.
+- Side-by-side **ZOOMED ORIGINAL** and **ZOOMED CLEANED** ROI previews generated in the Worker.
+- Fast detect metadata path that skips packet-rate statistics until export actually needs them.
+- Reuses an already detected region during export instead of repeating full watermark detection.
 - Known 1080p, 720p and portrait Veo watermark candidates.
 - Local coordinate refinement around the best known candidate.
 - Spatial + gradient correlation detector.
@@ -57,7 +62,7 @@ npm run setup:alpha
 npm run dev
 ```
 
-Open the local Vite URL, choose/drop a Gemini/Veo video, run **Analyze watermark**, review the detected position/confidence, then click **Clean video**.
+Open the local Vite URL and choose/drop a Gemini/Veo video. v1.0.6 automatically starts a quick watermark scan after the UI has painted. When confidence is high enough, the detected box plus Original/Cleaned zoom previews appear immediately. If the quick scan is not conclusive, the app automatically expands to the configured full scan. Use **Re-analyze full video** only when you explicitly want to run the full detector again.
 
 ### Why `npm run setup:alpha`?
 
@@ -97,16 +102,24 @@ The current Vite setting uses `base: './'`, so generated JS/CSS/worker asset URL
 
 See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the smoke-test checklist and deployment troubleshooting.
 
-## Default processing pipeline
+## Default detection pipeline
 
 ```text
 Local MP4
-  -> MediaBunny demux
-  -> sample 12 frames
+  -> file validation
+  -> browser video preview
+  -> Worker quick scan: 4 frames from first 25%
   -> catalog candidates
   -> spatial + gradient scoring
   -> local position refinement
-  -> alpha-gain estimate
+  -> if confidence is strong: show box + ROI previews
+  -> otherwise: automatic full 12-frame scan
+```
+
+## Export pipeline
+
+```text
+Detected region
   -> full-frame decode
   -> confidence gate per frame
   -> inverse-alpha restoration
@@ -131,8 +144,8 @@ The detector locally searches around the best prior instead of assuming the anch
 
 ## Tuning guide
 
-- **Sample frames**: 12 is the normal balance. Raise toward 18-24 for longer videos with fades or scene changes.
-- **Min confidence**: default 0.12. Raising it is safer but may reject weak watermarks.
+- **Full scan frames**: 12 is the normal fallback. Raise toward 18-24 for longer videos with fades or scene changes.
+- **Min confidence**: default 0.12. Quick-scan acceptance is deliberately stricter than this threshold.
 - **Alpha gain**: normally leave at the detected value after analysis.
 - **Edge polish**: default 0.35. Increase carefully if a thin diamond outline remains.
 - **Adaptive alpha**: recommended; changes are capped frame-to-frame to reduce flicker.
