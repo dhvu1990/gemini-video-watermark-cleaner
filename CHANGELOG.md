@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.10 - 2026-08-14
+
+- Added automatic **alpha-shape calibration** after a watermark is detected.
+- Calibration evaluates 54 bounded combinations across two embedded alpha profiles, three shape scales, three edge-boost values, and three edge-gain values using up to three sampled watermark ROIs.
+- Added a residual-edge objective that favors lower remaining diamond-edge energy while penalizing visible changes outside the watermark footprint.
+- Split cleanup strength conceptually into **Body gain** (existing adaptive alpha gain) and **Edge gain** (selected by calibration and applied preferentially to low-alpha/gradient regions).
+- Added calibrated alpha-map persistence inside the current Web Worker so full-video export reuses the same selected map without recalibrating or decoding the video a second time.
+- `ZOOMED CLEANED` now uses the selected calibrated alpha map, making the preview a direct quality check for the map that export will use.
+- Added Tune-panel diagnostics for selected profile, shape scale, edge gain, edge boost, and residual score.
+- Added calibration helper tests and extended syntax checks to the new calibration modules.
+- Kept watermark position detection/catalog geometry unchanged from v1.0.9.
+
 ## 1.0.9 - 2026-08-14
 
 - Added a dedicated **4. Result preview** panel below Export.
