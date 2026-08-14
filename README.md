@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.0** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.1** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -13,7 +13,7 @@ This repository was designed after studying two MIT-licensed projects:
 
 The goal here is not to mirror either codebase. It is a smaller independent video-focused implementation that keeps the strongest stable ideas and avoids making experimental ML denoise a required dependency.
 
-See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison and [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices.
+See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices, and [`PROJECT_LOG.md`](./PROJECT_LOG.md) for the complete implementation/CI history.
 
 ## Features
 
@@ -114,7 +114,7 @@ The detector locally searches around the best prior instead of assuming the anch
 - Audio is copied only when the source audio codec can be placed directly into MP4; unsupported audio is omitted rather than transcoded in-browser.
 - Detection is optimized for the visible Gemini/Veo diamond-style overlay and known layout families. Future Google changes may require catalog/alpha updates.
 - The fallback procedural alpha template is approximate; run `npm run setup:alpha` for the pinned reference profiles.
-- ML/FDnCNN denoise is intentionally not a v1.0.0 default. A masked, benchmarked optional backend can be added later without changing the main restoration architecture.
+- ML/FDnCNN denoise is intentionally not a v1 default. A masked, benchmarked optional backend can be added later without changing the main restoration architecture.
 
 ## Development
 
