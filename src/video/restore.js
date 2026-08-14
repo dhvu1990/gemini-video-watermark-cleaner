@@ -140,6 +140,22 @@ function directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, sign, ma
   return null;
 }
 
+function neighborhoodStructureStrength(data, width, height, x, y) {
+  let maxGradient = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    const yy = y + dy;
+    if (yy <= 0 || yy >= height - 1) continue;
+    for (let dx = -1; dx <= 1; dx++) {
+      const xx = x + dx;
+      if (xx <= 0 || xx >= width - 1) continue;
+      const gx = luma(data, (yy * width + xx + 1) * 4) - luma(data, (yy * width + xx - 1) * 4);
+      const gy = luma(data, ((yy + 1) * width + xx) * 4) - luma(data, ((yy - 1) * width + xx) * 4);
+      maxGradient = Math.max(maxGradient, Math.hypot(gx, gy));
+    }
+  }
+  return maxGradient;
+}
+
 export function applyDirectionalEdgeReconstruction(imageData, alphaMap, strength = 0.75) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0) return imageData;
@@ -185,16 +201,15 @@ export function applyDirectionalEdgeReconstruction(imageData, alphaMap, strength
       }
 
       const anchorGuard = smoothstep(24, 96, anchorDelta);
-      const idx = p * 4;
-      const imageGx = luma(data, idx + 4) - luma(data, idx - 4);
-      const imageGy = luma(data, idx + width * 4) - luma(data, idx - width * 4);
-      const localStructureGuard = smoothstep(36, 118, Math.hypot(imageGx, imageGy));
+      const structureMagnitude = neighborhoodStructureStrength(data, width, height, x, y);
+      const localStructureGuard = smoothstep(28, 82, structureMagnitude);
       const haloBand = smoothstep(0.012, 0.14, localMax) * (1 - smoothstep(0.10, 0.30, a));
       const edgeBand = clamp(edge[p] * 0.82 + haloBand * 0.58, 0, 1);
-      const guard = clamp(anchorGuard * 0.78 + localStructureGuard * 0.22, 0, 1);
-      const blend = Math.min(0.82, safeStrength * edgeBand * anchorSupport * (1 - guard * 0.82));
+      const guard = clamp(anchorGuard * 0.55 + localStructureGuard * 0.65, 0, 1);
+      const blend = Math.min(0.82, safeStrength * edgeBand * anchorSupport * (1 - guard * 0.94));
       if (blend < 0.045) continue;
 
+      const idx = p * 4;
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + predicted[c] * blend);
     }
   }
