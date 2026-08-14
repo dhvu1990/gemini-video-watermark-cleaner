@@ -90,6 +90,17 @@
             <label>High-body residual<input id="calResidualHigh" value="-" readonly /></label>
           </div>
         </div>
+        <div class="calibration-card">
+          <strong>Post-clean edge diagnostics</strong>
+          <div class="row">
+            <label>Final total residual<input id="finalResidualTotal" value="-" readonly /></label>
+            <label>Final improvement<input id="finalResidualImprovement" value="-" readonly /></label>
+          </div>
+          <div class="row">
+            <label>Final luma residual<input id="finalResidualLuma" value="-" readonly /></label>
+            <label>Final chroma residual<input id="finalResidualChroma" value="-" readonly /></label>
+          </div>
+        </div>
         <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive body gain with calibration clamp</label>
         <label class="check"><input id="temporalStabilize" type="checkbox" checked /> Detail core + edge bridge + micro finish + quadrant chroma finish + atlas</label>
         <label class="check"><input id="forceCleanup" type="checkbox" /> Force cleanup when confidence is low</label>
