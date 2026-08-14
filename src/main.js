@@ -134,7 +134,13 @@ function renderDetection(result, { source = 'full' } = {}) {
     if (Number.isFinite(d.alphaGain)) els.alphaGain.value = d.alphaGain.toFixed(3);
   }
 
-  els.detectResult.textContent = JSON.stringify({ metadata: meta, detection: d }, null, 2);
+  const finalCleanup = preview?.edgeBridge ? {
+    before: preview.edgeBridge.finalResidualBefore || null,
+    after: preview.edgeBridge.finalResidualAfter || null,
+    improvement: preview.edgeBridge.finalResidualImprovement ?? null,
+    correctedPixels: preview.edgeBridge.quadrantPixels ?? 0
+  } : null;
+  els.detectResult.textContent = JSON.stringify({ metadata: meta, detection: d, finalCleanup }, null, 2);
   els.previewPanel.classList.remove('hidden');
   if (preview?.original) drawRoi(els.originalZoom, preview.original);
   if (preview?.cleaned) drawRoi(els.cleanedZoom, preview.cleaned);

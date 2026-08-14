@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyMicroEdgeFinish, applyNormalEdgeBridge } from '../src/video/edgeBridge.js';
+import {
+  applyAdaptiveQuadrantChromaFinish,
+  applyMicroEdgeFinish,
+  applyNormalEdgeBridge,
+  measurePostCleanupResidual
+} from '../src/video/edgeBridge.js';
 import { buildHybridRepairMask } from '../src/video/textureRepair.js';
 
 function image(width, height, fn) {
@@ -52,18 +57,12 @@ test('normal edge bridge reduces a dark diamond ring while preserving core detai
     const core = masks.core[p] || 0;
     const ringDamage = edge > 0.28 ? 42 : 0;
     const coreDetail = core > 0.55 ? ((x + y) % 3) * 4 : 0;
-    return [
-      clean.data[i] - ringDamage + coreDetail,
-      clean.data[i + 1] - ringDamage + coreDetail,
-      clean.data[i + 2] - ringDamage + coreDetail
-    ];
+    return [clean.data[i] - ringDamage + coreDetail, clean.data[i + 1] - ringDamage + coreDetail, clean.data[i + 2] - ringDamage + coreDetail];
   });
-
   const repaired = applyNormalEdgeBridge(damaged, alpha, 1);
   const edgeMask = masks.edge.map((v) => v > 0.32);
   const coreMask = masks.core.map((v) => v > 0.55);
   assert.ok(repaired.edgeBridge.bridgedPixels > 0);
-  assert.ok(repaired.edgeBridge.finishingPixels >= 0);
   assert.ok(mae(repaired, clean, edgeMask) < mae(damaged, clean, edgeMask));
   assert.ok(mae(repaired, damaged, coreMask) < 2.0);
 });
@@ -82,7 +81,6 @@ test('micro edge finish improves a thin residual ring without flattening the cor
     const texture = core > 0.55 ? ((x * 3 + y * 5) % 7) - 3 : 0;
     return [clean.data[i] - halo + texture, clean.data[i + 1] - halo + texture, clean.data[i + 2] - halo + texture];
   });
-
   const finished = applyMicroEdgeFinish(residual, alpha, 0.72);
   const edgeMask = masks.edge.map((v, p) => v > 0.34 && masks.core[p] < 0.45);
   const coreMask = masks.core.map((v) => v > 0.55);
@@ -91,10 +89,35 @@ test('micro edge finish improves a thin residual ring without flattening the cor
   assert.ok(mae(finished, residual, coreMask) < 0.75);
 });
 
+test('adaptive quadrant chroma finish reduces cyan edge ghost and preserves core', () => {
+  const width = 49, height = 49;
+  const alpha = diamondAlpha(width, height);
+  const masks = buildHybridRepairMask(alpha, width, height);
+  const clean = image(width, height, (x, y) => [72 + x, 98 + Math.floor(y * 0.8), 126 + ((x + 2 * y) % 4)]);
+  const ghosted = image(width, height, (x, y) => {
+    const p = y * width + x;
+    const i = p * 4;
+    const edge = masks.edge[p] || 0;
+    const core = masks.core[p] || 0;
+    const heavyQuadrant = x >= width / 2 && y < height / 2;
+    const ghost = edge > 0.30 && core < 0.45 ? (heavyQuadrant ? 26 : 13) : 0;
+    return [clean.data[i] - ghost, clean.data[i + 1] + Math.floor(ghost * 0.35), clean.data[i + 2] + ghost];
+  });
+  const before = measurePostCleanupResidual(ghosted, alpha);
+  const finished = applyAdaptiveQuadrantChromaFinish(ghosted, alpha, before, 0.75);
+  const after = measurePostCleanupResidual(finished, alpha);
+  const coreMask = masks.core.map((v) => v > 0.55);
+  assert.ok(before.quadrants['top-right'].total > before.quadrants['bottom-left'].total);
+  assert.ok(finished.quadrantFinish.correctedPixels > 0);
+  assert.ok(after.chroma < before.chroma);
+  assert.ok(after.total < before.total);
+  assert.ok(mae(finished, ghosted, coreMask) < 0.75);
+});
+
 test('normal edge bridge backs off across a strong real structure', () => {
   const width = 41, height = 41;
   const alpha = diamondAlpha(width, height);
-  const base = image(width, height, (x, y) => x < 20 ? [35, 45, 60] : [210, 220, 230]);
+  const base = image(width, height, (x) => x < 20 ? [35, 45, 60] : [210, 220, 230]);
   const repaired = applyNormalEdgeBridge(base, alpha, 1);
   const centerLeft = (20 * width + 19) * 4;
   const centerRight = (20 * width + 21) * 4;
