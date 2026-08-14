@@ -94,9 +94,7 @@ export function applyResidualFootprintCleanup(imageData, alphaMap, strength = 0.
       }
       if (weightSum <= 0) continue;
       const blend = Math.min(0.58, mask * 0.58);
-      for (let c = 0; c < 3; c++) {
-        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
-      }
+      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
     }
   }
   return { width, height, data: out };
@@ -171,9 +169,7 @@ export function applyDirectionalEdgeReconstruction(imageData, alphaMap, strength
       if (!negative || !positive) continue;
 
       const totalDistance = negative.distance + positive.distance;
-      const predicted = [0, 1, 2].map((c) => (
-        negative.rgb[c] * positive.distance + positive.rgb[c] * negative.distance
-      ) / totalDistance);
+      const predicted = [0, 1, 2].map((c) => (negative.rgb[c] * positive.distance + positive.rgb[c] * negative.distance) / totalDistance);
       const anchorDelta = (
         Math.abs(negative.rgb[0] - positive.rgb[0]) +
         Math.abs(negative.rgb[1] - positive.rgb[1]) +
@@ -235,7 +231,8 @@ export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
   }
 
   const polished = { width, height, data: out };
-  return applyResidualFootprintCleanup(polished, cleanupAlpha, Math.min(0.85, 0.45 + safeStrength * 0.55));
+  const footprint = applyResidualFootprintCleanup(polished, cleanupAlpha, Math.min(0.85, 0.45 + safeStrength * 0.55));
+  return applyDirectionalEdgeReconstruction(footprint, cleanupAlpha, Math.min(0.9, 0.62 + safeStrength * 0.28));
 }
 
 export function stabilizeCorrection(original, processed, previous, alphaMap, strength = 0.7) {
