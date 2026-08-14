@@ -97,6 +97,170 @@ function bridgePrediction(outer, inner) {
   return [0, 1, 2].map((c) => outer.rgb[c] * outerWeight + inner.rgb[c] * innerWeight);
 }
 
+function rgbToYcbcr(rgb) {
+  const [r, g, b] = rgb;
+  const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  const cb = (b - y) * 0.5389;
+  const cr = (r - y) * 0.6350;
+  return [y, cb, cr];
+}
+
+function ycbcrToRgb(y, cb, cr) {
+  const r = y + cr / 0.6350;
+  const b = y + cb / 0.5389;
+  const g = (y - 0.2126 * r - 0.0722 * b) / 0.7152;
+  return [clampByte(r), clampByte(g), clampByte(b)];
+}
+
+function quadrantOf(x, y, width, height) {
+  const horizontal = x < width / 2 ? 'left' : 'right';
+  const vertical = y < height / 2 ? 'top' : 'bottom';
+  return `${vertical}-${horizontal}`;
+}
+
+export function measurePostCleanupResidual(image, alphaMap) {
+  const { width, height, data } = image;
+  const masks = buildHybridRepairMask(alphaMap, width, height);
+  const names = ['top-left', 'top-right', 'bottom-left', 'bottom-right'];
+  const quadrants = Object.fromEntries(names.map((name) => [name, { luma: 0, chroma: 0, weight: 0, samples: 0 }]));
+  let lumaSum = 0;
+  let chromaSum = 0;
+  let weightSum = 0;
+  let samples = 0;
+
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const p = y * width + x;
+      const alpha = alphaMap[p] || 0;
+      const edge = masks.edge[p] || 0;
+      const feather = masks.feather[p] || 0;
+      const core = masks.core[p] || 0;
+      const ringWeight = clamp(edge * 1.04 + feather * 0.22 - core * 0.92, 0, 1);
+      if (alpha < 0.006 || ringWeight < 0.18 || core > 0.50) continue;
+      const gradient = gradientAt(alphaMap, width, x, y);
+      if (gradient.magnitude < 0.0015) continue;
+      const nx = gradient.gx / gradient.magnitude;
+      const ny = gradient.gy / gradient.magnitude;
+      const outer = findOuterAnchor(image, alphaMap, x, y, nx, ny, 6.5);
+      const inner = findInnerAnchor(image, alphaMap, masks, x, y, nx, ny, alpha, 6.5);
+      if (!outer || !inner) continue;
+      const predicted = bridgePrediction(outer, inner);
+      if (!predicted) continue;
+
+      const idx = p * 4;
+      const current = rgbToYcbcr([data[idx], data[idx + 1], data[idx + 2]]);
+      const target = rgbToYcbcr(predicted);
+      const lumaResidual = Math.abs(current[0] - target[0]);
+      const chromaResidual = (Math.abs(current[1] - target[1]) + Math.abs(current[2] - target[2])) * 0.5;
+      const weight = ringWeight * (0.65 + Math.min(0.35, gradient.magnitude * 5));
+      lumaSum += lumaResidual * weight;
+      chromaSum += chromaResidual * weight;
+      weightSum += weight;
+      samples++;
+
+      const name = quadrantOf(x, y, width, height);
+      const q = quadrants[name];
+      q.luma += lumaResidual * weight;
+      q.chroma += chromaResidual * weight;
+      q.weight += weight;
+      q.samples++;
+    }
+  }
+
+  const normalizedQuadrants = {};
+  for (const name of names) {
+    const q = quadrants[name];
+    normalizedQuadrants[name] = {
+      luma: q.weight ? q.luma / q.weight : 0,
+      chroma: q.weight ? q.chroma / q.weight : 0,
+      total: q.weight ? (q.luma * 0.38 + q.chroma * 0.62) / q.weight : 0,
+      samples: q.samples
+    };
+  }
+  const luma = weightSum ? lumaSum / weightSum : 0;
+  const chroma = weightSum ? chromaSum / weightSum : 0;
+  return {
+    luma,
+    chroma,
+    total: luma * 0.38 + chroma * 0.62,
+    samples,
+    quadrants: normalizedQuadrants
+  };
+}
+
+export function applyAdaptiveQuadrantChromaFinish(image, alphaMap, diagnostics = null, strength = 0.55) {
+  const safeStrength = clamp(Number(strength) || 0, 0, 1);
+  if (safeStrength <= 0 || alphaMap.length !== image.width * image.height) return image;
+  const residual = diagnostics || measurePostCleanupResidual(image, alphaMap);
+  const { width, height, data } = image;
+  const masks = buildHybridRepairMask(alphaMap, width, height);
+  const out = new Uint8ClampedArray(data);
+  const quadrantTotals = Object.values(residual.quadrants || {}).map((q) => q.total).filter(Number.isFinite);
+  const meanQuadrant = quadrantTotals.length ? quadrantTotals.reduce((a, b) => a + b, 0) / quadrantTotals.length : residual.total;
+  let correctedPixels = 0;
+  let blendSum = 0;
+
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const p = y * width + x;
+      const alpha = alphaMap[p] || 0;
+      const edge = masks.edge[p] || 0;
+      const feather = masks.feather[p] || 0;
+      const core = masks.core[p] || 0;
+      const ringWeight = clamp(edge * 1.10 + feather * 0.18 - core * 1.00, 0, 1);
+      if (alpha < 0.006 || ringWeight < 0.25 || core > 0.42) continue;
+
+      const gradient = gradientAt(alphaMap, width, x, y);
+      if (gradient.magnitude < 0.0018) continue;
+      const nx = gradient.gx / gradient.magnitude;
+      const ny = gradient.gy / gradient.magnitude;
+      const outer = findOuterAnchor(image, alphaMap, x, y, nx, ny, 6.0);
+      const inner = findInnerAnchor(image, alphaMap, masks, x, y, nx, ny, alpha, 6.0);
+      if (!outer || !inner) continue;
+      const predicted = bridgePrediction(outer, inner);
+      if (!predicted) continue;
+
+      const anchorDelta = (
+        Math.abs(outer.rgb[0] - inner.rgb[0])
+        + Math.abs(outer.rgb[1] - inner.rgb[1])
+        + Math.abs(outer.rgb[2] - inner.rgb[2])
+      ) / 3;
+      const structureGuard = smoothstep(24, 82, anchorDelta);
+      const q = residual.quadrants?.[quadrantOf(x, y, width, height)] || { total: residual.total };
+      const quadrantBoost = clamp(0.72 + (q.total - meanQuadrant) / Math.max(8, meanQuadrant) * 0.38, 0.55, 1.18);
+      const idx = p * 4;
+      const currentYcc = rgbToYcbcr([data[idx], data[idx + 1], data[idx + 2]]);
+      const targetYcc = rgbToYcbcr(predicted);
+      const chromaResidual = (Math.abs(currentYcc[1] - targetYcc[1]) + Math.abs(currentYcc[2] - targetYcc[2])) * 0.5;
+      const residualGate = smoothstep(1.4, 11, chromaResidual);
+      const baseBlend = safeStrength * ringWeight * quadrantBoost * residualGate * (1 - structureGuard * 0.90);
+      if (baseBlend < 0.035) continue;
+
+      const lumaBlend = Math.min(0.18, baseBlend * 0.24);
+      const chromaBlend = Math.min(0.62, baseBlend * 0.82);
+      const yValue = currentYcc[0] + clamp(targetYcc[0] - currentYcc[0], -14, 14) * lumaBlend;
+      const cbValue = currentYcc[1] + clamp(targetYcc[1] - currentYcc[1], -24, 24) * chromaBlend;
+      const crValue = currentYcc[2] + clamp(targetYcc[2] - currentYcc[2], -24, 24) * chromaBlend;
+      const rgb = ycbcrToRgb(yValue, cbValue, crValue);
+      out[idx] = rgb[0];
+      out[idx + 1] = rgb[1];
+      out[idx + 2] = rgb[2];
+      correctedPixels++;
+      blendSum += chromaBlend;
+    }
+  }
+
+  return {
+    width,
+    height,
+    data: out,
+    quadrantFinish: {
+      correctedPixels,
+      meanChromaBlend: correctedPixels ? blendSum / correctedPixels : 0
+    }
+  };
+}
+
 export function applyMicroEdgeFinish(image, alphaMap, strength = 0.48) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0 || alphaMap.length !== image.width * image.height) return image;
@@ -223,15 +387,27 @@ export function applyNormalEdgeBridge(image, alphaMap, strength = 0.90) {
 
   const bridged = { width, height, data: out };
   const finished = applyMicroEdgeFinish(bridged, alphaMap, 0.48);
+  const residualBefore = measurePostCleanupResidual(finished, alphaMap);
+  const adaptive = applyAdaptiveQuadrantChromaFinish(finished, alphaMap, residualBefore, 0.55);
+  const residualAfter = measurePostCleanupResidual(adaptive, alphaMap);
+  const improvement = residualBefore.total > 0
+    ? clamp((residualBefore.total - residualAfter.total) / residualBefore.total, -1, 1)
+    : 0;
+
   return {
     width,
     height,
-    data: finished.data,
+    data: adaptive.data,
     edgeBridge: {
       bridgedPixels,
       meanBlend: bridgedPixels ? blendSum / bridgedPixels : 0,
       finishingPixels: finished.edgeFinish?.finishingPixels || 0,
-      finishingMeanBlend: finished.edgeFinish?.meanBlend || 0
+      finishingMeanBlend: finished.edgeFinish?.meanBlend || 0,
+      quadrantPixels: adaptive.quadrantFinish?.correctedPixels || 0,
+      quadrantMeanChromaBlend: adaptive.quadrantFinish?.meanChromaBlend || 0,
+      finalResidualBefore: residualBefore,
+      finalResidualAfter: residualAfter,
+      finalResidualImprovement: improvement
     }
   };
 }
