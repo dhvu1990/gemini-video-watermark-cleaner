@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   applyPaddedTextureRepair,
   applyTemporalDonorRepair,
+  buildHybridRepairMask,
   embedAlphaMap,
   estimateTemporalShift
 } from '../src/video/textureRepair.js';
@@ -29,18 +30,50 @@ function mae(a, b, mask = null) {
   return count ? sum / count : 0;
 }
 
-test('padded texture repair pulls a dark footprint toward surrounding background', () => {
+function hybridAlpha(width, height) {
+  const alpha = new Float32Array(width * height);
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const dx = Math.abs(x - cx);
+      const dy = Math.abs(y - cy);
+      const radius = dx + dy;
+      if (radius <= 3) alpha[y * width + x] = 0.58;
+      else if (radius <= 6) alpha[y * width + x] = 0.16;
+      else if (radius <= 8) alpha[y * width + x] = 0.045;
+    }
+  }
+  return alpha;
+}
+
+test('padded texture repair pulls a dark edge footprint toward surrounding background without flattening the core', () => {
   const width = 40, height = 40;
   const original = image(width, height, (x, y) => [80 + x, 100 + Math.floor(y / 2), 125 + Math.floor(x / 3)]);
-  const alpha = new Float32Array(width * height);
-  for (let y = 12; y < 28; y++) for (let x = 12; x < 28; x++) alpha[y * width + x] = 0.32;
+  const alpha = hybridAlpha(width, height);
   const damaged = image(width, height, (x, y) => {
     const i = (y * width + x) * 4;
-    const inside = alpha[y * width + x] > 0;
-    return inside ? [original.data[i] - 34, original.data[i + 1] - 34, original.data[i + 2] - 34] : [original.data[i], original.data[i + 1], original.data[i + 2]];
+    const a = alpha[y * width + x];
+    const damage = a > 0 && a < 0.30 ? 36 : (a >= 0.30 ? 8 : 0);
+    return [original.data[i] - damage, original.data[i + 1] - damage, original.data[i + 2] - damage];
   });
   const repaired = applyPaddedTextureRepair(damaged, alpha, 0.8);
-  assert.ok(mae(repaired, original, alpha.map((v) => v > 0)) < mae(damaged, original, alpha.map((v) => v > 0)));
+  const masks = buildHybridRepairMask(alpha, width, height);
+  const edgeMask = masks.edge.map((v) => v > 0.35);
+  const coreMask = masks.core.map((v) => v > 0.55);
+  assert.ok(mae(repaired, original, edgeMask) < mae(damaged, original, edgeMask));
+  assert.ok(mae(repaired, damaged, coreMask) < 2.5);
+});
+
+test('hybrid repair mask separates high-alpha core from edge ring', () => {
+  const width = 25, height = 25;
+  const alpha = hybridAlpha(width, height);
+  const mask = buildHybridRepairMask(alpha, width, height);
+  const center = 12 * width + 12;
+  const edge = 12 * width + 18;
+  assert.ok(mask.core[center] > 0.7);
+  assert.ok(mask.edge[center] < 0.25);
+  assert.ok(mask.edge[edge] > mask.core[edge]);
 });
 
 test('temporal shift detects translated clean border texture', () => {
