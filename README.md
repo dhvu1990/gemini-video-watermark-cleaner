@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.2** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.3** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -13,7 +13,7 @@ This repository was designed after studying two MIT-licensed projects:
 
 The goal here is not to mirror either codebase. It is a smaller independent video-focused implementation that keeps the strongest stable ideas and avoids making experimental ML denoise a required dependency.
 
-See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices, and [`PROJECT_LOG.md`](./PROJECT_LOG.md) for the complete implementation/CI history.
+See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices, [`PROJECT_LOG.md`](./PROJECT_LOG.md) for the complete execution history, and [`DEPLOYMENT.md`](./DEPLOYMENT.md) for web deployment.
 
 ## Features
 
@@ -34,6 +34,7 @@ See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.m
 - BT.709 color metadata on encoded video.
 - Web Worker processing, progress reporting and cancellation.
 - Unit tests and GitHub Actions CI.
+- GitHub Pages production deployment workflow.
 
 ## Quick start
 
@@ -64,6 +65,32 @@ npm run build
 ```
 
 The resulting `dist/` folder is static and can be hosted on GitHub Pages, Cloudflare Pages, Netlify, an internal web server, or any static hosting service.
+
+## GitHub Pages deployment
+
+v1.0.3 adds `.github/workflows/deploy-pages.yml`.
+
+On every push to `main`, the workflow:
+
+1. checks out the repository,
+2. installs Node.js 22,
+3. installs dependencies,
+4. synchronizes the pinned alpha profiles,
+5. runs syntax checks,
+6. runs unit tests,
+7. builds the Vite production bundle,
+8. uploads `dist/` as the Pages artifact,
+9. deploys it to the `github-pages` environment.
+
+The current Vite setting uses `base: './'`, so generated JS/CSS/worker asset URLs remain relative and work under the repository project path without hard-coding the repository name.
+
+If GitHub Pages is enabled for the repository, the expected project URL is:
+
+```text
+https://dhvu1990.github.io/gemini-video-watermark-cleaner/
+```
+
+This repository is currently private. GitHub Pages for a private personal repository requires a plan that supports Pages for private repositories. If Pages has not yet been enabled, open **Repository Settings -> Pages -> Build and deployment** and select **GitHub Actions** as the source. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the exact checklist and troubleshooting notes.
 
 ## Default processing pipeline
 
@@ -115,6 +142,7 @@ The detector locally searches around the best prior instead of assuming the anch
 - Detection is optimized for the visible Gemini/Veo diamond-style overlay and known layout families. Future Google changes may require catalog/alpha updates.
 - The fallback procedural alpha template is approximate; run `npm run setup:alpha` for the pinned reference profiles.
 - ML/FDnCNN denoise is intentionally not a v1 default. A masked, benchmarked optional backend can be added later without changing the main restoration architecture.
+- GitHub Pages availability depends on repository visibility/account plan and repository Pages settings.
 
 ## Development
 

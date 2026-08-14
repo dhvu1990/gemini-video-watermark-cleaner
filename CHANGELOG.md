@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.3 - 2026-08-14
+
+- Added a GitHub Pages production deployment workflow that builds, validates, uploads, and deploys the Vite `dist/` artifact from `main`.
+- Added `DEPLOYMENT.md` with the exact Pages enablement checklist, privacy notes, smoke-test procedure, regression evidence checklist, and troubleshooting guidance.
+- Updated CI from `actions/checkout@v4` / `actions/setup-node@v4` to current major v7 releases.
+- Kept Vite `base: './'` because relative assets are appropriate for the GitHub Pages project subpath.
+- Documented that a private repository does not automatically make a Pages site private and that private Pages access control requires an eligible organization/enterprise setup.
+- Bumped package and README version to `1.0.3`.
+
 ## 1.0.2 - 2026-08-14
 
 - Recorded successful GitHub Actions validation for PR #2: dependency install, pinned alpha-profile sync, syntax checks, unit tests, and Vite production build all passed.
