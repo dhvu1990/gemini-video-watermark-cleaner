@@ -126,13 +126,13 @@ function bilinearRgb(data, width, height, x, y) {
   ));
 }
 
-function directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, sign, maxRadius = 9) {
+function directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, sign, maxRadius = 11) {
   for (let distance = 1.25; distance <= maxRadius; distance += 0.75) {
     const sx = x + nx * distance * sign;
     const sy = y + ny * distance * sign;
     const alpha = bilinearAlpha(alphaMap, width, height, sx, sy);
     if (alpha === null) break;
-    if (alpha <= 0.008) {
+    if (alpha <= 0.010) {
       const rgb = bilinearRgb(data, width, height, sx, sy);
       if (rgb) return { distance, rgb };
     }
@@ -166,15 +166,24 @@ export function applyDirectionalEdgeReconstruction(imageData, alphaMap, strength
       const ny = gyA / grad;
       const negative = directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, -1);
       const positive = directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, 1);
-      if (!negative || !positive) continue;
+      if (!negative && !positive) continue;
 
-      const totalDistance = negative.distance + positive.distance;
-      const predicted = [0, 1, 2].map((c) => (negative.rgb[c] * positive.distance + positive.rgb[c] * negative.distance) / totalDistance);
-      const anchorDelta = (
-        Math.abs(negative.rgb[0] - positive.rgb[0]) +
-        Math.abs(negative.rgb[1] - positive.rgb[1]) +
-        Math.abs(negative.rgb[2] - positive.rgb[2])
-      ) / 3;
+      let predicted;
+      let anchorDelta = 0;
+      let anchorSupport = 0.72;
+      if (negative && positive) {
+        const totalDistance = negative.distance + positive.distance;
+        predicted = [0, 1, 2].map((c) => (negative.rgb[c] * positive.distance + positive.rgb[c] * negative.distance) / totalDistance);
+        anchorDelta = (
+          Math.abs(negative.rgb[0] - positive.rgb[0]) +
+          Math.abs(negative.rgb[1] - positive.rgb[1]) +
+          Math.abs(negative.rgb[2] - positive.rgb[2])
+        ) / 3;
+        anchorSupport = 1;
+      } else {
+        predicted = (negative || positive).rgb;
+      }
+
       const anchorGuard = smoothstep(24, 96, anchorDelta);
       const idx = p * 4;
       const imageGx = luma(data, idx + 4) - luma(data, idx - 4);
@@ -183,8 +192,8 @@ export function applyDirectionalEdgeReconstruction(imageData, alphaMap, strength
       const haloBand = smoothstep(0.012, 0.14, localMax) * (1 - smoothstep(0.10, 0.30, a));
       const edgeBand = clamp(edge[p] * 0.82 + haloBand * 0.58, 0, 1);
       const guard = clamp(anchorGuard * 0.78 + localStructureGuard * 0.22, 0, 1);
-      const blend = Math.min(0.82, safeStrength * edgeBand * (1 - guard * 0.82));
-      if (blend < 0.06) continue;
+      const blend = Math.min(0.82, safeStrength * edgeBand * anchorSupport * (1 - guard * 0.82));
+      if (blend < 0.045) continue;
 
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + predicted[c] * blend);
     }
