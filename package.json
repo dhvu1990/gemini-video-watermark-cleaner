@@ -1,9 +1,9 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "private": false,
   "type": "module",
-  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with multi-frame detection, calibrated inverse-alpha restoration, padded texture repair and multi-frame background atlas reconstruction.",
+  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with hybrid detail-preserving core restoration and aggressive edge-ring reconstruction.",
   "scripts": {
     "setup:alpha": "node scripts/sync-alpha-assets.mjs",
     "dev": "vite",
