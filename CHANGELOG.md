@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.9 - 2026-08-14
+
+- Added a dedicated **4. Result preview** panel below Export.
+- The cleaned MP4 is now attached to an in-browser video player immediately after export completes so the result can be reviewed before downloading.
+- Result playback uses the same local Blob URL as the existing **Download cleaned MP4** action; no additional upload or server round trip is introduced.
+- Added normal browser video controls for play/pause, seek, volume and fullscreen where supported.
+- Automatically scrolls to the result panel after a successful export.
+- Selecting a new source video or starting another cleanup pass now pauses/resets the old result player and revokes its previous Blob URL to avoid stale playback and retained browser memory.
+- Kept v1.0.8 detector, alpha, edge cleanup and export algorithms unchanged; this release is a result-review UX addition only.
+
 ## 1.0.8 - 2026-08-14
 
 - Added a rotating spinner to the analysis button while automatic quick/full detection is running so long analysis is visibly active.
