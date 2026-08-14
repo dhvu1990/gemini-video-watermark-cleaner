@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyEdgeGain, residualEdgeScore, scaleAlphaShape } from '../src/video/calibration.js';
+import {
+  applyEdgeGain,
+  backgroundContinuityScore,
+  bodyGainCandidates,
+  residualEdgeScore,
+  scaleAlphaShape
+} from '../src/video/calibration.js';
+import { inverseAlphaRestore } from '../src/video/restore.js';
 
 function diamondAlpha(size) {
   const out = new Float32Array(size * size);
@@ -24,14 +31,22 @@ function image(size, value = 80) {
   return { width: size, height: size, data };
 }
 
+function compositeWhite(background, alpha, gain = 1) {
+  const out = { width: background.width, height: background.height, data: new Uint8ClampedArray(background.data) };
+  for (let p = 0; p < alpha.length; p++) {
+    const a = Math.min(0.95, alpha[p] * gain);
+    const i = p * 4;
+    for (let c = 0; c < 3; c++) out.data[i + c] = Math.round(background.data[i + c] * (1 - a) + 255 * a);
+  }
+  return out;
+}
+
 test('shape scale expands alpha footprint without changing dimensions', () => {
   const size = 24;
   const alpha = diamondAlpha(size);
   const expanded = scaleAlphaShape(alpha, size, 1.03);
   assert.equal(expanded.length, alpha.length);
-  const originalSum = alpha.reduce((a, b) => a + b, 0);
-  const expandedSum = expanded.reduce((a, b) => a + b, 0);
-  assert.ok(expandedSum > originalSum);
+  assert.ok(expanded.reduce((a, b) => a + b, 0) > alpha.reduce((a, b) => a + b, 0));
 });
 
 test('edge gain strengthens edge-weighted alpha while preserving center bounds', () => {
@@ -56,4 +71,23 @@ test('residual score penalizes a strong artificial edge', () => {
     }
   }
   assert.ok(residualEdgeScore(original, edged, alpha) > residualEdgeScore(original, clean, alpha));
+});
+
+test('body gain candidates search below an overestimated detector gain', () => {
+  const values = bodyGainCandidates(1.125);
+  assert.ok(values.some((value) => value < 0.95));
+  assert.ok(values.includes(1));
+  assert.ok(values.every((value) => value >= 0.55 && value <= 1.35));
+});
+
+test('background continuity penalizes over-clean dark center', () => {
+  const size = 32;
+  const alpha = diamondAlpha(size);
+  const background = image(size, 90);
+  const observed = compositeWhite(background, alpha, 0.82);
+  const correct = inverseAlphaRestore(observed, alpha, 0.82);
+  const over = inverseAlphaRestore(observed, alpha, 1.18);
+  const correctScore = backgroundContinuityScore(observed, correct, alpha);
+  const overScore = backgroundContinuityScore(observed, over, alpha);
+  assert.ok(correctScore < overScore);
 });

@@ -155,7 +155,8 @@ export async function inspectVideo(file, options = {}) {
       frames,
       width: metadata.width,
       height: metadata.height,
-      minConfidence: options.minConfidence ?? 0.12
+      minConfidence: options.minConfidence ?? 0.12,
+      edgePolish: options.edgePolish ?? 0.35
     });
 
     const preview = createDetectionPreview(frames, detection, options.edgePolish ?? 0.35);
@@ -227,9 +228,10 @@ function frameGain(roi, alphaMap, requested, previous, adaptive, score) {
     { x: 0, y: 0, width: roi.width, height: roi.height },
     alphaMap
   );
-  const blended = requested * 0.45 + local * 0.55;
-  if (!Number.isFinite(previous)) return blended;
-  return Math.max(previous - 0.04, Math.min(previous + 0.04, blended));
+  const blended = requested * 0.7 + local * 0.3;
+  const aroundCalibration = Math.max(requested - 0.06, Math.min(requested + 0.06, blended));
+  if (!Number.isFinite(previous)) return aroundCalibration;
+  return Math.max(previous - 0.025, Math.min(previous + 0.025, aroundCalibration));
 }
 
 function normalizeRegion(region) {
@@ -356,7 +358,7 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.6',
+        version: '1.0.11',
         position,
         alphaGain: previousGain,
         processedFrames,

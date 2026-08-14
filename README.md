@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.10** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.11** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -19,16 +19,16 @@ The implementation is independently structured, video-focused and local-first. S
 https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 ```
 
-## v1.0.10 highlights
+## v1.0.11 highlights
 
-- Adds **automatic alpha-shape calibration** after the watermark position is detected.
-- Tests a bounded 54-combination search across embedded alpha profile, footprint scale, edge boost and edge gain on up to three sampled watermark ROIs.
-- Chooses the configuration with the lowest residual diamond-edge score while penalizing changes outside the watermark footprint.
-- Separates **Body gain** from **Edge gain** so the outline can be corrected more aggressively without globally over-darkening the already-cleaned center.
-- Reuses the calibrated alpha map inside the current Web Worker for full-video export, so calibration is not repeated at export time.
-- `ZOOMED CLEANED` uses the same calibrated alpha map that export will use.
-- Tune displays selected Profile, Shape scale, Edge gain, Edge boost and Residual score.
-- Keeps detector position/catalog geometry unchanged from v1.0.9.
+- Fixes the real-video regression observed in v1.0.10 where calibration could over-darken the watermark center while still leaving the diamond outline visible.
+- Body gain is now calibrated independently before the profile/shape/edge search rather than being fixed to the detector's first opacity estimate.
+- Body-gain candidates explicitly include values below the detector estimate, allowing the cleaner to recover when the estimate is too aggressive.
+- Candidate scoring now emphasizes **background continuity**: cleaned pixels inside the watermark are compared with interpolated safe background anchors outside the alpha footprint.
+- Adds penalties for clipped/over-dark pixels and for changing pixels outside the watermark footprint.
+- Edge/profile search remains bounded to 54 shape candidates for browser performance.
+- Adaptive per-frame body gain is now clamped to within ±0.06 of the calibrated gain and changes by at most ±0.025 per frame, preventing export from drifting back toward an overestimated value.
+- The detector geometry/catalog path remains unchanged; v1.0.11 only changes post-detection calibration and gain stability.
 
 ## Main features
 
@@ -37,11 +37,11 @@ https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 - Automatic quick detection after file selection with full-scan fallback.
 - Full-frame preview with detected Gemini bounding box.
 - `ZOOMED ORIGINAL` and `ZOOMED CLEANED` ROI previews generated in a Web Worker.
-- Automatic alpha-shape calibration for the detected watermark footprint.
+- Automatic body + edge alpha calibration for the detected watermark footprint.
 - Known 1080p, 720p and portrait Veo geometry candidates with local coordinate refinement.
 - Spatial + gradient correlation detector.
 - Fail-closed confidence threshold plus manual override/force-cleanup fallback.
-- Inverse-alpha restoration, adaptive per-frame body gain, scene-cut reset and temporal stabilization.
+- Inverse-alpha restoration, bounded adaptive per-frame body gain, scene-cut reset and temporal stabilization.
 - Edge-weighted alpha gain plus residual edge/footprint cleanup for the visible diamond border.
 - MediaBunny/WebCodecs AVC MP4 export with compatible encoded-audio passthrough.
 - Direct cleaned-video result preview in the browser before download.
@@ -74,9 +74,10 @@ Local video
   -> Worker quick scan: 3 frames from first 18%
   -> catalog candidates + spatial/gradient scoring
   -> local coordinate refinement
-  -> body alpha-gain estimate
-  -> bounded alpha-shape calibration on up to 3 ROIs
-  -> selected profile + shape scale + edge boost + edge gain
+  -> initial body alpha-gain estimate
+  -> independent body-gain search using background continuity
+  -> bounded profile + shape scale + edge boost + edge gain search
+  -> selected calibrated alpha map + calibrated body gain
   -> show box + calibrated ROI preview
   -> automatically run full scan only if quick detection is not strong enough
 ```
@@ -86,7 +87,7 @@ Local video
 ```text
 Detected region + calibrated alpha map
   -> per-frame confidence gate
-  -> adaptive body gain
+  -> adaptive body gain clamped around calibrated value
   -> inverse-alpha restoration
   -> calibrated edge gain/footprint
   -> masked edge polish
@@ -111,13 +112,13 @@ Detected region + calibrated alpha map
 
 - **Full scan frames**: 12 is the normal fallback. Increase for unusually long or highly edited videos.
 - **Min confidence**: default 0.12; quick acceptance is deliberately stricter.
-- **Body gain**: detected main watermark opacity. Normally keep the detected value; adaptive correction may adjust it per frame.
+- **Body gain**: automatically calibrated main watermark opacity. v1.0.11 can reduce it below the initial detector estimate when the preview becomes too dark.
 - **Edge gain**: selected automatically by calibration and displayed read-only. It targets low-alpha/gradient regions rather than multiplying the entire watermark.
 - **Shape scale**: selected alpha-footprint scale around the watermark center.
 - **Edge boost**: selected low-alpha edge enhancement used to better cover the visible outline.
 - **Residual score**: calibration objective; lower is better within the tested candidate set, but visual review remains the final quality check.
 - **Edge polish**: default 0.35. Residual footprint cleanup is bounded, so avoid raising this aggressively unless testing shows it is needed.
-- **Adaptive body gain**: recommended.
+- **Adaptive body gain**: recommended; v1.0.11 constrains it around the calibrated value to avoid drift.
 - **Temporal stabilization**: recommended for static/slow backgrounds.
 - **Manual override / Force cleanup**: only when automatic detection is uncertain.
 
@@ -137,6 +138,7 @@ The generated `dist/` directory is static and is deployed by `.github/workflows/
 
 - Video is re-encoded to AVC/H.264 MP4; export is not lossless.
 - Audio is copied only when its encoded codec can be placed directly into MP4.
+- Background-continuity calibration is heuristic and assumes nearby low-alpha pixels are useful anchors; complex moving textures can still be difficult.
 - The calibration grid is intentionally bounded for browser performance; a future watermark variant may still require new profiles or wider search ranges.
 - Highly textured backgrounds may still show some residual artifacts even after calibration.
 - ML/FDnCNN remains an optional future quality tier rather than a default dependency.
