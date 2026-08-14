@@ -2,6 +2,12 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function smoothstep(edge0, edge1, value) {
+  if (edge0 === edge1) return value >= edge1 ? 1 : 0;
+  const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+}
+
 function luma(data, idx) {
   return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2];
 }
@@ -63,6 +69,31 @@ function validDonorPixel(alphaMap, width, height, x, y, allowMaskedDonors) {
   return allowMaskedDonors || (alphaMap[y * width + x] || 0) <= 0.008;
 }
 
+function atlasHybridMask(alphaMap, width, height) {
+  const mask = new Float32Array(alphaMap.length);
+  let maxGradient = 0;
+  const gradient = new Float32Array(alphaMap.length);
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      const gx = (alphaMap[p + 1] || 0) - (alphaMap[p - 1] || 0);
+      const gy = (alphaMap[p + width] || 0) - (alphaMap[p - width] || 0);
+      gradient[p] = Math.hypot(gx, gy);
+      maxGradient = Math.max(maxGradient, gradient[p]);
+    }
+  }
+  if (maxGradient > 0) for (let p = 0; p < gradient.length; p++) gradient[p] /= maxGradient;
+  for (let p = 0; p < alphaMap.length; p++) {
+    const a = alphaMap[p] || 0;
+    if (a <= 0.004) continue;
+    const edgeRing = clamp((gradient[p] || 0) * 0.86 + smoothstep(0.006, 0.07, a) * (1 - smoothstep(0.20, 0.40, a)) * 0.62, 0, 1);
+    const core = smoothstep(0.24, 0.50, a) * (1 - edgeRing * 0.88);
+    const feather = clamp(smoothstep(0.06, 0.24, a) * (1 - core) * (0.30 + edgeRing * 0.70), 0, 1);
+    mask[p] = clamp(edgeRing * 1.0 + feather * 0.42 + core * 0.02, 0, 1);
+  }
+  return mask;
+}
+
 export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
   const { width, height } = current;
   const maxHistory = Math.max(1, Math.min(12, Math.round(options.maxHistory || 8)));
@@ -119,6 +150,7 @@ export function applyBackgroundAtlas(processed, alphaMap, atlas, strength = 0.92
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   const out = new Uint8ClampedArray(processed.data);
   const minSupport = atlas.allowMaskedDonors ? 3 : 2;
+  const hybrid = atlasHybridMask(alphaMap, processed.width, processed.height);
   for (let p = 0; p < alphaMap.length; p++) {
     const a = alphaMap[p] || 0;
     if (a <= 0.006) continue;
@@ -126,9 +158,10 @@ export function applyBackgroundAtlas(processed, alphaMap, atlas, strength = 0.92
     if (support < minSupport) continue;
     const confidence = atlas.confidence[p] || 0;
     if (confidence < 0.20) continue;
-    const alphaGate = clamp((a - 0.006) / 0.34, 0, 1);
-    const blend = Math.min(0.94, safeStrength * confidence * (0.55 + alphaGate * 0.45));
-    if (blend < 0.12) continue;
+    const regionWeight = hybrid[p] || 0;
+    if (regionWeight <= 0.01) continue;
+    const blend = Math.min(0.92, safeStrength * confidence * regionWeight);
+    if (blend < 0.04) continue;
     const idx = p * 4;
     for (let c = 0; c < 3; c++) {
       out[idx + c] = Math.round(processed.data[idx + c] * (1 - blend) + atlas.data[idx + c] * blend);
