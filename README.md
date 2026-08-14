@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.4** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.5** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -13,11 +13,14 @@ This repository was designed after studying two MIT-licensed projects:
 
 The goal here is not to mirror either codebase. It is a smaller independent video-focused implementation that keeps the strongest stable ideas and avoids making experimental ML denoise a required dependency.
 
-See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices, [`PROJECT_LOG.md`](./PROJECT_LOG.md) for the complete execution history, and [`DEPLOYMENT.md`](./DEPLOYMENT.md) for web deployment.
+See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.md`](./ATTRIBUTION.md) for third-party notices, [`PROJECT_LOG.md`](./PROJECT_LOG.md) for the project history, [`logs/`](./logs/) for detailed incident/regression logs, and [`DEPLOYMENT.md`](./DEPLOYMENT.md) for web deployment.
 
 ## Features
 
 - 100% local video processing in the browser.
+- Robust local video selection using MIME **or** `.mp4/.mov/.m4v/.webm` extension fallback.
+- Explicit **Choose video** button plus drag-and-drop.
+- Immediate file-validation feedback beside the selector.
 - 12-frame multi-frame analysis by default.
 - Known 1080p, 720p and portrait Veo watermark candidates.
 - Local coordinate refinement around the best known candidate.
@@ -36,6 +39,14 @@ See [`RESEARCH.md`](./RESEARCH.md) for the technical comparison, [`ATTRIBUTION.m
 - Unit tests and GitHub Actions CI.
 - GitHub Pages production deployment workflow.
 
+## Production site
+
+```text
+https://dhvu1990.github.io/gemini-video-watermark-cleaner/
+```
+
+GitHub Pages was enabled and the deployment workflow completed successfully end-to-end on 2026-08-14. Each push to `main` runs validation/build and deploys the generated `dist/` artifact.
+
 ## Quick start
 
 Requirements: Node.js 20+ and a recent Chromium-based browser with WebCodecs video encoding support.
@@ -46,7 +57,7 @@ npm run setup:alpha
 npm run dev
 ```
 
-Open the local Vite URL, drop in a Gemini/Veo video, run **Analyze watermark**, review the detected position/confidence, then click **Clean video**.
+Open the local Vite URL, choose/drop a Gemini/Veo video, run **Analyze watermark**, review the detected position/confidence, then click **Clean video**.
 
 ### Why `npm run setup:alpha`?
 
@@ -68,9 +79,9 @@ The resulting `dist/` folder is static and can be hosted on GitHub Pages, Cloudf
 
 ## GitHub Pages deployment
 
-v1.0.3 added `.github/workflows/deploy-pages.yml`. The production build path has been validated end-to-end up to the GitHub Pages configuration step.
+`.github/workflows/deploy-pages.yml` runs on every push to `main` and can also be started manually.
 
-On every push to `main`, the workflow:
+The workflow:
 
 1. checks out the repository,
 2. installs Node.js 22,
@@ -84,23 +95,7 @@ On every push to `main`, the workflow:
 
 The current Vite setting uses `base: './'`, so generated JS/CSS/worker asset URLs remain relative and work under the repository project path without hard-coding the repository name.
 
-### Current deployment status
-
-The v1.0.3 deployment run successfully completed dependency install, alpha-profile sync, syntax checks, all 5 unit tests, and the Vite production build. It then stopped at `Configure GitHub Pages` because Pages is not yet enabled/configured for this repository.
-
-The remaining one-time repository step is:
-
-**Repository Settings -> Pages -> Build and deployment -> Source: GitHub Actions**
-
-After that, re-run the `Deploy GitHub Pages` workflow. The workflow intentionally does not try to auto-enable Pages because the `configure-pages` action requires a token other than the default `GITHUB_TOKEN` for automatic enablement.
-
-If GitHub Pages is enabled for the repository, the expected public project URL is:
-
-```text
-https://dhvu1990.github.io/gemini-video-watermark-cleaner/
-```
-
-This repository is currently private. GitHub Pages for a private personal repository requires a plan that supports Pages for private repositories. A private repository does not automatically make a Pages site private. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the exact checklist and privacy notes.
+See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the smoke-test checklist and deployment troubleshooting.
 
 ## Default processing pipeline
 
@@ -152,7 +147,6 @@ The detector locally searches around the best prior instead of assuming the anch
 - Detection is optimized for the visible Gemini/Veo diamond-style overlay and known layout families. Future Google changes may require catalog/alpha updates.
 - The fallback procedural alpha template is approximate; run `npm run setup:alpha` for the pinned reference profiles.
 - ML/FDnCNN denoise is intentionally not a v1 default. A masked, benchmarked optional backend can be added later without changing the main restoration architecture.
-- GitHub Pages availability depends on repository visibility/account plan and repository Pages settings.
 
 ## Development
 
