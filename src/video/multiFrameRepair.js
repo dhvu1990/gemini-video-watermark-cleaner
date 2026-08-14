@@ -58,9 +58,9 @@ export function estimateAtlasShift(current, donor, alphaMap, maxShift = 8) {
   return best;
 }
 
-function validDonorPixel(alphaMap, width, height, x, y) {
+function validDonorPixel(alphaMap, width, height, x, y, allowMaskedDonors) {
   if (x < 0 || y < 0 || x >= width || y >= height) return false;
-  return (alphaMap[y * width + x] || 0) <= 0.008;
+  return allowMaskedDonors || (alphaMap[y * width + x] || 0) <= 0.008;
 }
 
 export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
@@ -68,6 +68,7 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
   const maxHistory = Math.max(1, Math.min(12, Math.round(options.maxHistory || 8)));
   const minImprovement = Number.isFinite(options.minImprovement) ? options.minImprovement : 0.08;
   const maxShift = Math.max(1, Math.min(12, Math.round(options.maxShift || 8)));
+  const allowMaskedDonors = options.allowMaskedDonors === true;
   const donors = [];
 
   for (const donor of (history || []).slice(-maxHistory)) {
@@ -89,7 +90,7 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
       for (const donor of donors) {
         const sx = x + donor.shift.dx;
         const sy = y + donor.shift.dy;
-        if (!validDonorPixel(alphaMap, width, height, sx, sy)) continue;
+        if (!validDonorPixel(alphaMap, width, height, sx, sy, allowMaskedDonors)) continue;
         const rgb = sampleRgb(donor.image, sx, sy);
         if (!rgb) continue;
         channels[0].push(rgb[0]);
@@ -100,7 +101,8 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
       const count = channels[0].length;
       if (!count) continue;
       support[p] = Math.min(255, count);
-      confidence[p] = clamp((count / 4) * 0.7 + (median(improvements) || 0) * 0.3, 0, 1);
+      const maskedPenalty = allowMaskedDonors && (alphaMap[p] || 0) > 0.008 ? 0.82 : 1;
+      confidence[p] = clamp(((count / 4) * 0.7 + (median(improvements) || 0) * 0.3) * maskedPenalty, 0, 1);
       const idx = p * 4;
       data[idx] = Math.round(median(channels[0]));
       data[idx + 1] = Math.round(median(channels[1]));
@@ -109,18 +111,19 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
     }
   }
 
-  return { width, height, data, support, confidence, donorCount: donors.length, donors };
+  return { width, height, data, support, confidence, donorCount: donors.length, donors, allowMaskedDonors };
 }
 
 export function applyBackgroundAtlas(processed, alphaMap, atlas, strength = 0.92) {
   if (!atlas || atlas.width !== processed.width || atlas.height !== processed.height) return processed;
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   const out = new Uint8ClampedArray(processed.data);
+  const minSupport = atlas.allowMaskedDonors ? 3 : 2;
   for (let p = 0; p < alphaMap.length; p++) {
     const a = alphaMap[p] || 0;
     if (a <= 0.006) continue;
     const support = atlas.support[p] || 0;
-    if (support < 2) continue;
+    if (support < minSupport) continue;
     const confidence = atlas.confidence[p] || 0;
     if (confidence < 0.20) continue;
     const alphaGate = clamp((a - 0.006) / 0.34, 0, 1);
@@ -138,8 +141,9 @@ export function summarizeAtlas(atlas) {
   if (!atlas) return { donorCount: 0, supportedPixels: 0, meanConfidence: 0 };
   let supportedPixels = 0;
   let confidenceSum = 0;
+  const minSupport = atlas.allowMaskedDonors ? 3 : 2;
   for (let i = 0; i < atlas.support.length; i++) {
-    if (atlas.support[i] >= 2) {
+    if (atlas.support[i] >= minSupport) {
       supportedPixels++;
       confidenceSum += atlas.confidence[i] || 0;
     }
@@ -147,6 +151,7 @@ export function summarizeAtlas(atlas) {
   return {
     donorCount: atlas.donorCount || 0,
     supportedPixels,
-    meanConfidence: supportedPixels ? confidenceSum / supportedPixels : 0
+    meanConfidence: supportedPixels ? confidenceSum / supportedPixels : 0,
+    allowMaskedDonors: Boolean(atlas.allowMaskedDonors)
   };
 }
