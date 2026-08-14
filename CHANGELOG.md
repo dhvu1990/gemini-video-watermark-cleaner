@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.11 - 2026-08-14
+
+- Fixed the real-video v1.0.10 regression where calibration could over-darken the watermark center while leaving the diamond outline visible.
+- Body gain is now calibrated independently before the profile/shape/edge search instead of being fixed to the detector's initial opacity estimate.
+- Added body-gain candidates below the initial estimate so calibration can recover from aggressive detector gain estimates.
+- Replaced the dominant residual-edge objective with a background-continuity objective that compares cleaned watermark pixels against interpolated low-alpha background anchors.
+- Added penalties for clipped/over-dark center pixels and for modifying pixels outside the watermark footprint.
+- Kept the bounded 54-candidate profile/shape/edge search after body-gain selection.
+- Detection now exposes both `estimatedAlphaGain` and the final calibrated `alphaGain` for diagnostics.
+- Adaptive export gain is clamped to ±0.06 around the calibrated Body gain and changes by at most ±0.025 per frame to prevent gain drift.
+- Updated export metadata to v1.0.11 and ensured detection receives the configured Edge polish value during calibration.
+- Added regression tests for lower body-gain search and over-clean/dark-center scoring.
+- Kept watermark position/catalog geometry unchanged.
+
 ## 1.0.10 - 2026-08-14
 
 - Added automatic **alpha-shape calibration** after a watermark is detected.
