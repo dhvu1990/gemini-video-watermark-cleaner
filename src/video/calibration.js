@@ -90,7 +90,11 @@ export function residualEdgeScore(original, cleaned, alphaMap) {
   return edgeResidual + outsideDamage * 1.8;
 }
 
-async function candidateMap(size, profile, shapeScale, edgeBoost, edgeGain) {
+export async function buildCalibratedAlphaMap(size, calibration = {}) {
+  const profile = calibration.profile || '96-20260520';
+  const shapeScale = Number.isFinite(calibration.shapeScale) ? calibration.shapeScale : 1;
+  const edgeBoost = Number.isFinite(calibration.edgeBoost) ? calibration.edgeBoost : 0.055;
+  const edgeGain = Number.isFinite(calibration.edgeGain) ? calibration.edgeGain : 1;
   const base = await getVideoAlphaMap(size, profile, edgeBoost);
   const shaped = scaleAlphaShape(base, size, shapeScale);
   return applyEdgeGain(shaped, size, edgeGain);
@@ -108,7 +112,7 @@ export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish
       for (const edgeBoost of EDGE_BOOSTS) {
         for (const edgeGain of EDGE_GAINS) {
           index++;
-          const alphaMap = await candidateMap(size, profile, shapeScale, edgeBoost, edgeGain);
+          const alphaMap = await buildCalibratedAlphaMap(size, { profile, shapeScale, edgeBoost, edgeGain });
           let score = 0;
           for (const roi of samples) {
             let cleaned = inverseAlphaRestore(roi, alphaMap, bodyGain);
