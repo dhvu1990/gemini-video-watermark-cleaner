@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
-  <title>Gemini Video Watermark Cleaner v1.0.0</title>
+  <title>Gemini Video Watermark Cleaner v1.0.5</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
@@ -13,16 +13,17 @@
       <p class="eyebrow">LOCAL-FIRST VIDEO TOOL</p>
       <h1>Gemini Video Watermark Cleaner</h1>
       <p>Multi-frame detection, inverse-alpha restoration, temporal stabilization, and MP4 export in your browser.</p>
-      <div class="badges"><span>v1.0.0</span><span>No upload</span><span>WebCodecs</span><span>Audio passthrough</span></div>
+      <div class="badges"><span>v1.0.5</span><span>No upload</span><span>WebCodecs</span><span>Audio passthrough</span></div>
     </header>
 
     <section class="panel">
-      <label class="drop" id="dropZone">
-        <input id="fileInput" type="file" accept="video/*" hidden />
+      <div class="drop" id="dropZone">
+        <input id="fileInput" type="file" accept="video/*,.mp4,.mov,.m4v,.webm" hidden />
         <strong>Drop a Gemini/Veo video here</strong>
-        <span>or click to choose a local file</span>
-      </label>
-      <div id="fileInfo" class="muted">No video selected.</div>
+        <span>or choose a local video file</span>
+        <button id="chooseFileBtn" type="button" class="secondary choose-file">Choose video</button>
+      </div>
+      <div id="fileInfo" class="muted" aria-live="polite">No video selected.</div>
     </section>
 
     <section class="grid">
@@ -66,7 +67,7 @@
         <a id="downloadBtn" class="button secondary disabled" aria-disabled="true">Download cleaned MP4</a>
       </div>
       <div class="progress"><div id="progressBar"></div></div>
-      <div id="status" class="muted">Ready.</div>
+      <div id="status" class="muted" aria-live="polite">Ready.</div>
     </section>
 
     <footer>
