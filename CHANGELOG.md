@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.18 - 2026-08-15
+
+- Added a **micro edge finishing pass** after the existing normal-direction edge bridge to target only the final thin Gemini diamond outline observed in real-video validation of v1.0.17.
+- The finishing mask is deliberately narrower than the main edge bridge: it emphasizes the strongest edge-ring pixels, reduces feather influence, and strongly suppresses high-alpha core pixels.
+- Reuses the calibrated alpha-gradient normal plus outer-background and inner-restored anchors so the final correction bridges across the residual outline instead of blurring the ROI.
+- Added residual gating so pixels are only adjusted when the current result still differs meaningfully from the predicted bridge color.
+- Added tighter structure guards, shorter anchor spans, a smaller per-channel correction cap, and a lower maximum blend than the primary edge bridge.
+- Integrated the finishing pass inside the existing `applyNormalEdgeBridge()` path so detection preview and full-video export automatically share the same behavior without duplicating processing logic.
+- Added diagnostics for `finishingPixels` and `finishingMeanBlend` alongside the existing edge-bridge statistics.
+- Added a regression test requiring the thin residual edge to move closer to the clean reference while the high-alpha core changes by less than one intensity level on average.
+- Kept v1.0.17 subpixel registration, residual-bucket calibration, detail-preserving core, padded repair, atlas, temporal stabilization and detector geometry unchanged.
+- Updated visible/package version to v1.0.18.
+- Detailed journal: `logs/2026-08-15-v1.0.18-edge-finishing-pass.md`.
+
 ## 1.0.17 - 2026-08-14
 
 - Added two-stage **subpixel alpha registration** after coarse calibration.
