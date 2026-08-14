@@ -1,16 +1,16 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "private": false,
   "type": "module",
-  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with multi-frame detection, calibrated inverse-alpha restoration, padded texture repair and temporal donor reconstruction.",
+  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with multi-frame detection, calibrated inverse-alpha restoration, padded texture repair and multi-frame background atlas reconstruction.",
   "scripts": {
     "setup:alpha": "node scripts/sync-alpha-assets.mjs",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/main.js && node --check src/calibration-ui.js && node --check src/video/file.js && node --check src/video/analysisPolicy.js && node --check src/video/alpha.js && node --check src/video/calibration.js && node --check src/video/catalog.js && node --check src/video/detect.js && node --check src/video/restore.js && node --check src/video/textureRepair.js && node --check src/video/engine.js && node --check src/video/worker.js"
+    "check": "node --check src/main.js && node --check src/calibration-ui.js && node --check src/video/file.js && node --check src/video/analysisPolicy.js && node --check src/video/alpha.js && node --check src/video/calibration.js && node --check src/video/catalog.js && node --check src/video/detect.js && node --check src/video/restore.js && node --check src/video/textureRepair.js && node --check src/video/multiFrameRepair.js && node --check src/video/engine.js && node --check src/video/worker.js"
   },
   "dependencies": {
     "mediabunny": "^1.46.0"
