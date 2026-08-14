@@ -102,6 +102,101 @@ export function applyResidualFootprintCleanup(imageData, alphaMap, strength = 0.
   return { width, height, data: out };
 }
 
+function bilinearAlpha(alphaMap, width, height, x, y) {
+  if (x < 0 || y < 0 || x > width - 1 || y > height - 1) return null;
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1);
+  const fx = x - x0, fy = y - y0;
+  const a00 = alphaMap[y0 * width + x0] || 0;
+  const a10 = alphaMap[y0 * width + x1] || 0;
+  const a01 = alphaMap[y1 * width + x0] || 0;
+  const a11 = alphaMap[y1 * width + x1] || 0;
+  return a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) + a01 * (1 - fx) * fy + a11 * fx * fy;
+}
+
+function bilinearRgb(data, width, height, x, y) {
+  if (x < 0 || y < 0 || x > width - 1 || y > height - 1) return null;
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1);
+  const fx = x - x0, fy = y - y0;
+  const sample = (xx, yy, c) => data[(yy * width + xx) * 4 + c];
+  return [0, 1, 2].map((c) => (
+    sample(x0, y0, c) * (1 - fx) * (1 - fy) +
+    sample(x1, y0, c) * fx * (1 - fy) +
+    sample(x0, y1, c) * (1 - fx) * fy +
+    sample(x1, y1, c) * fx * fy
+  ));
+}
+
+function directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, sign, maxRadius = 9) {
+  for (let distance = 1.25; distance <= maxRadius; distance += 0.75) {
+    const sx = x + nx * distance * sign;
+    const sy = y + ny * distance * sign;
+    const alpha = bilinearAlpha(alphaMap, width, height, sx, sy);
+    if (alpha === null) break;
+    if (alpha <= 0.008) {
+      const rgb = bilinearRgb(data, width, height, sx, sy);
+      if (rgb) return { distance, rgb };
+    }
+  }
+  return null;
+}
+
+export function applyDirectionalEdgeReconstruction(imageData, alphaMap, strength = 0.75) {
+  const safeStrength = clamp(Number(strength) || 0, 0, 1);
+  if (safeStrength <= 0) return imageData;
+  const { width, height, data } = imageData;
+  if (alphaMap.length !== width * height) return imageData;
+  const edge = alphaEdgeMap(alphaMap, width, height);
+  const out = new Uint8ClampedArray(data);
+
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const p = y * width + x;
+      const a = alphaMap[p] || 0;
+      let localMax = a;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) localMax = Math.max(localMax, alphaMap[(y + dy) * width + x + dx] || 0);
+      }
+      if (localMax < 0.012 || a > 0.30) continue;
+
+      const gxA = (alphaMap[p + 1] || 0) - (alphaMap[p - 1] || 0);
+      const gyA = (alphaMap[p + width] || 0) - (alphaMap[p - width] || 0);
+      const grad = Math.hypot(gxA, gyA);
+      if (grad < 0.0015) continue;
+      const nx = gxA / grad;
+      const ny = gyA / grad;
+      const negative = directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, -1);
+      const positive = directionalAnchor(data, alphaMap, width, height, x, y, nx, ny, 1);
+      if (!negative || !positive) continue;
+
+      const totalDistance = negative.distance + positive.distance;
+      const predicted = [0, 1, 2].map((c) => (
+        negative.rgb[c] * positive.distance + positive.rgb[c] * negative.distance
+      ) / totalDistance);
+      const anchorDelta = (
+        Math.abs(negative.rgb[0] - positive.rgb[0]) +
+        Math.abs(negative.rgb[1] - positive.rgb[1]) +
+        Math.abs(negative.rgb[2] - positive.rgb[2])
+      ) / 3;
+      const anchorGuard = smoothstep(24, 96, anchorDelta);
+      const idx = p * 4;
+      const imageGx = luma(data, idx + 4) - luma(data, idx - 4);
+      const imageGy = luma(data, idx + width * 4) - luma(data, idx - width * 4);
+      const localStructureGuard = smoothstep(36, 118, Math.hypot(imageGx, imageGy));
+      const haloBand = smoothstep(0.012, 0.14, localMax) * (1 - smoothstep(0.10, 0.30, a));
+      const edgeBand = clamp(edge[p] * 0.82 + haloBand * 0.58, 0, 1);
+      const guard = clamp(anchorGuard * 0.78 + localStructureGuard * 0.22, 0, 1);
+      const blend = Math.min(0.82, safeStrength * edgeBand * (1 - guard * 0.82));
+      if (blend < 0.06) continue;
+
+      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + predicted[c] * blend);
+    }
+  }
+
+  return { width, height, data: out };
+}
+
 export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0) return imageData;
@@ -135,9 +230,7 @@ export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
       }
       if (weightSum <= 0) continue;
       const blend = Math.min(0.34, mask * 0.28);
-      for (let c = 0; c < 3; c++) {
-        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
-      }
+      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
     }
   }
 
