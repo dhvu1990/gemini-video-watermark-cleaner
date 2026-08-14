@@ -113,7 +113,7 @@ function embeddedProfile(targetSize, profile) {
   return ALPHA_MAPS[baseProfile] || ALPHA_MAPS['96-20260520'] || ALPHA_MAPS['96'] || ALPHA_MAPS['48'] || null;
 }
 
-export async function getVideoAlphaMap(targetSize, profile = 'auto', edgeBoost = 0.045) {
+export async function getVideoAlphaMap(targetSize, profile = 'auto', edgeBoost = 0) {
   const safeSize = Math.max(16, Math.round(targetSize));
   const profileKey = profile === 'auto' ? (safeSize < 40 ? '48' : '96-20260520') : String(profile);
   const safeBoost = clamp(Number(edgeBoost) || 0, 0, 0.12);
@@ -129,7 +129,11 @@ export async function getVideoAlphaMap(targetSize, profile = 'auto', edgeBoost =
   }
 
   const resized = resizeAlphaMapArea(base, sourceSize, safeSize);
-  const enhanced = safeSize >= 40 ? enhanceAlphaEdges(resized, safeSize, safeBoost) : resized;
-  CACHE.set(key, enhanced);
-  return new Float32Array(enhanced);
+  const result = safeBoost > 0 ? enhanceAlphaEdges(resized, safeSize, safeBoost) : resized;
+  CACHE.set(key, result);
+  return new Float32Array(result);
+}
+
+export async function getCleanupAlphaMap(targetSize, profile = 'auto', edgeBoost = 0.045) {
+  return getVideoAlphaMap(targetSize, profile, edgeBoost);
 }
