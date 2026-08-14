@@ -1,5 +1,6 @@
 import { resolveVideoWatermarkCandidates } from './catalog.js';
-import { getVideoAlphaMap } from './alpha.js';
+import { getVideoAlphaMap, setActiveAlphaCalibration } from './alpha.js';
+import { calibrateAlphaShape } from './calibration.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function luma(data, idx) { return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]; }
@@ -68,11 +69,7 @@ function aggregate(scores) {
   const keep = Math.max(1, Math.ceil(values.length * 0.6));
   const topMean = values.slice(0, keep).reduce((a, b) => a + b, 0) / keep;
   const voteRatio = values.filter((value) => value >= 0.08).length / values.length;
-  return {
-    confidence: topMean * 0.9 + voteRatio * 0.1,
-    voteRatio,
-    maxConfidence: values[0]
-  };
+  return { confidence: topMean * 0.9 + voteRatio * 0.1, voteRatio, maxConfidence: values[0] };
 }
 
 async function evaluateCandidate(frames, candidate) {
@@ -108,6 +105,16 @@ function median(values) {
   return clean.length % 2 ? clean[mid] : (clean[mid - 1] + clean[mid]) / 2;
 }
 
+function cropRoi(imageData, position) {
+  const size = position.width ?? position.size;
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    const start = ((position.y + y) * imageData.width + position.x) * 4;
+    data.set(imageData.data.subarray(start, start + size * 4), y * size * 4);
+  }
+  return { width: size, height: size, data };
+}
+
 export function estimateAlphaGain(imageData, position, alphaMap) {
   const size = position.width ?? position.size;
   let backgroundSum = 0;
@@ -139,11 +146,9 @@ export function estimateAlphaGain(imageData, position, alphaMap) {
   return clamp(median(gains) ?? 1, 0.65, 1.35);
 }
 
-export async function detectVideoWatermarkFromFrames({ frames, width, height, minConfidence = 0.12 }) {
+export async function detectVideoWatermarkFromFrames({ frames, width, height, minConfidence = 0.12, edgePolish = 0.35 }) {
   const candidates = resolveVideoWatermarkCandidates(width, height);
-  if (!frames?.length || !candidates.length) {
-    return { detected: false, confidence: 0, reason: 'no-frames-or-candidates' };
-  }
+  if (!frames?.length || !candidates.length) return { detected: false, confidence: 0, reason: 'no-frames-or-candidates' };
 
   const evaluations = [];
   for (const candidate of candidates) evaluations.push(await evaluateCandidate(frames, candidate));
@@ -155,6 +160,17 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     .map((frame) => estimateAlphaGain(frame.imageData, best.candidate, best.alphaMap));
   const alphaGain = clamp(median(gains) ?? 1, 0.65, 1.35);
 
+  let calibration = null;
+  if (best.confidence >= minConfidence) {
+    const sourceFrames = frames.length <= 3 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
+    const rois = sourceFrames.map((frame) => cropRoi(frame.imageData, best.candidate));
+    calibration = await calibrateAlphaShape({ rois, size: best.candidate.size, bodyGain: alphaGain, edgePolish });
+    if (calibration?.alphaMap) {
+      best.alphaMap = calibration.alphaMap;
+      setActiveAlphaCalibration(best.candidate.size, calibration.alphaMap, calibration);
+    }
+  }
+
   return {
     detected: best.confidence >= minConfidence,
     reason: best.confidence >= minConfidence ? 'multi-frame-match' : 'low-confidence',
@@ -164,6 +180,14 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     maxConfidence: best.maxConfidence,
     position: { x: best.candidate.x, y: best.candidate.y, width: best.candidate.size, height: best.candidate.size },
     alphaGain,
+    calibration: calibration ? {
+      profile: calibration.profile,
+      shapeScale: calibration.shapeScale,
+      edgeBoost: calibration.edgeBoost,
+      edgeGain: calibration.edgeGain,
+      bodyGain: calibration.bodyGain,
+      residualScore: calibration.residualScore
+    } : null,
     alphaMap: best.alphaMap,
     frameScores: best.scores
   };
