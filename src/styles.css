@@ -42,7 +42,10 @@ h2 { margin-top: 0; font-size: 18px; }
 .row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .triple { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 label { display: grid; gap: 7px; font-size: 13px; color: #c9d1e3; margin-bottom: 12px; }
-input[type="number"] { width: 100%; border: 1px solid #354565; background: #0c1325; color: #eef3ff; border-radius: 10px; padding: 10px 11px; }
+input[type="number"], .calibration-card input { width: 100%; border: 1px solid #354565; background: #0c1325; color: #eef3ff; border-radius: 10px; padding: 10px 11px; }
+.calibration-card { margin: 4px 0 14px; padding: 13px; border: 1px solid #31476f; border-radius: 12px; background: rgba(19, 34, 64, .65); }
+.calibration-card > strong { display: block; margin-bottom: 10px; color: #8fc4ff; font-size: 13px; }
+.calibration-card input[readonly] { color: #7ee7b4; background: #0a1324; cursor: default; }
 .check { grid-template-columns: auto 1fr; align-items: center; justify-content: start; gap: 8px; }
 button, .button { border: 0; border-radius: 10px; padding: 11px 15px; background: #e8efff; color: #091022; font-weight: 700; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
 button.loading::before { content: ''; width: 15px; height: 15px; margin-right: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
