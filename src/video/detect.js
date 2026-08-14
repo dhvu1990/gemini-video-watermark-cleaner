@@ -159,19 +159,20 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
   const gains = frames
     .filter((_, index) => (best.scores[index]?.confidence ?? best.confidence) >= 0.05)
     .map((frame) => estimateAlphaGain(frame.imageData, best.candidate, best.alphaMap));
-  const alphaGain = clamp(median(gains) ?? 1, 0.65, 1.35);
+  const estimatedAlphaGain = clamp(median(gains) ?? 1, 0.65, 1.35);
 
   let calibration = null;
   if (best.confidence >= minConfidence) {
     const sourceFrames = frames.length <= 3 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
     const rois = sourceFrames.map((frame) => cropRoi(frame.imageData, best.candidate));
-    calibration = await calibrateAlphaShape({ rois, size: best.candidate.size, bodyGain: alphaGain, edgePolish });
+    calibration = await calibrateAlphaShape({ rois, size: best.candidate.size, bodyGain: estimatedAlphaGain, edgePolish });
     if (calibration?.alphaMap) {
       best.alphaMap = calibration.alphaMap;
       setActiveAlphaCalibration(best.candidate.size, calibration.alphaMap, calibration);
     }
   }
 
+  const alphaGain = Number.isFinite(calibration?.bodyGain) ? calibration.bodyGain : estimatedAlphaGain;
   return {
     detected: best.confidence >= minConfidence,
     reason: best.confidence >= minConfidence ? 'multi-frame-match' : 'low-confidence',
@@ -181,13 +182,17 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     maxConfidence: best.maxConfidence,
     position: { x: best.candidate.x, y: best.candidate.y, width: best.candidate.size, height: best.candidate.size },
     alphaGain,
+    estimatedAlphaGain,
     calibration: calibration ? {
       profile: calibration.profile,
       shapeScale: calibration.shapeScale,
       edgeBoost: calibration.edgeBoost,
       edgeGain: calibration.edgeGain,
       bodyGain: calibration.bodyGain,
-      residualScore: calibration.residualScore
+      initialBodyGain: calibration.initialBodyGain,
+      residualScore: calibration.residualScore,
+      baselineScore: calibration.baselineScore,
+      improvement: calibration.improvement
     } : null,
     alphaMap: best.alphaMap,
     frameScores: best.scores
