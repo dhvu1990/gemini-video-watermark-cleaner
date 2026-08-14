@@ -9,7 +9,11 @@ const fields = {
   residualScore: document.getElementById('calResidual'),
   residualEdge: document.getElementById('calResidualEdge'),
   residualLow: document.getElementById('calResidualLow'),
-  residualHigh: document.getElementById('calResidualHigh')
+  residualHigh: document.getElementById('calResidualHigh'),
+  finalTotal: document.getElementById('finalResidualTotal'),
+  finalLuma: document.getElementById('finalResidualLuma'),
+  finalChroma: document.getElementById('finalResidualChroma'),
+  finalImprovement: document.getElementById('finalResidualImprovement')
 };
 
 function reset() {
@@ -37,6 +41,15 @@ function render() {
     fields.residualEdge.value = format(buckets.edge, 3);
     fields.residualLow.value = format(buckets.lowBody, 3);
     fields.residualHigh.value = format(buckets.highBody, 3);
+
+    const finalCleanup = payload?.finalCleanup;
+    const after = finalCleanup?.after || {};
+    if (fields.finalTotal) fields.finalTotal.value = format(after.total, 3);
+    if (fields.finalLuma) fields.finalLuma.value = format(after.luma, 3);
+    if (fields.finalChroma) fields.finalChroma.value = format(after.chroma, 3);
+    if (fields.finalImprovement) fields.finalImprovement.value = Number.isFinite(finalCleanup?.improvement)
+      ? `${(finalCleanup.improvement * 100).toFixed(1)}%`
+      : '-';
   } catch {
     reset();
   }
