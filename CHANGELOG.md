@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 - 2026-08-14
+
+- Fixed GitHub Actions CI startup failure caused by `actions/setup-node@v4` using `cache: npm` without a committed npm lockfile.
+- CI now uses Node.js 22 without npm cache, then runs dependency install, alpha-profile synchronization, syntax checks, unit tests, and production build.
+- Added a dedicated project execution log to preserve repository research, implementation, validation, CI failures, fixes, branch/commit/PR history, and next-step status.
+
 ## 1.0.0 - 2026-08-14
 
 - Initial independent release.
