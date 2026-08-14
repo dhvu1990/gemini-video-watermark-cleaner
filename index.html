@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
-  <title>Gemini Video Watermark Cleaner v1.0.10</title>
+  <title>Gemini Video Watermark Cleaner v1.0.11</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
@@ -12,8 +12,8 @@
     <header class="hero">
       <p class="eyebrow">LOCAL-FIRST VIDEO TOOL</p>
       <h1>Gemini Video Watermark Cleaner</h1>
-      <p>Automatic multi-frame detection, alpha-shape calibration, inverse-alpha restoration, and local MP4 export.</p>
-      <div class="badges"><span>v1.0.10</span><span>Auto detect</span><span>Auto alpha calibration</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
+      <p>Automatic multi-frame detection, body/edge alpha calibration, inverse-alpha restoration, and local MP4 export.</p>
+      <div class="badges"><span>v1.0.11</span><span>Auto detect</span><span>Body + edge calibration</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
     </header>
 
     <section class="panel">
@@ -81,7 +81,7 @@
             <label>Residual score<input id="calResidual" value="-" readonly /></label>
           </div>
         </div>
-        <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive body gain with per-frame step cap</label>
+        <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive body gain with calibration clamp</label>
         <label class="check"><input id="temporalStabilize" type="checkbox" checked /> Temporal correction stabilization</label>
         <label class="check"><input id="forceCleanup" type="checkbox" /> Force cleanup when confidence is low</label>
       </div>
