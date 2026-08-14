@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.6 - 2026-08-14
+
+- Changed the default UX from manual **Analyze watermark** to automatic detection immediately after selecting a video.
+- Added progressive detection: a 4-frame quick scan over only the first 25% of the video, followed automatically by the normal full scan only when the quick result is not strong enough.
+- Added a full-frame video preview with the detected watermark bounding box overlaid directly on the video.
+- Added **ZOOMED ORIGINAL** and **ZOOMED CLEANED** ROI previews generated from a representative sampled frame in the Web Worker.
+- Added a stricter quick-scan acceptance policy so fast detection does not trade away confidence silently.
+- Split detection metadata from export statistics so normal detection no longer computes packet-rate statistics that are only needed later for export.
+- Reused the already detected region during cleanup/export, avoiding a second full watermark-analysis pass after the user has already reviewed a successful detection.
+- Renamed the manual detector button to **Re-analyze full video**.
+- Added progressive-analysis unit tests and extended syntax checks to cover the new analysis policy module.
+- Updated the visible application title/badge to `v1.0.6` and documented the real-browser performance regression that motivated this release.
+
 ## 1.0.5 - 2026-08-14
 
 - Fixed deployed-browser file selection appearing to hang when Chrome/Windows provides an empty or non-standard MIME type for a Gemini/Veo video.

@@ -34,21 +34,27 @@ function createInput(file) {
   return new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
 }
 
-async function metadataOf(input, track) {
-  const [width, height, firstTimestamp, codec, durationMeta, packetStats] = await Promise.all([
+async function metadataOf(input, track, { includeStats = false } = {}) {
+  const [width, height, firstTimestamp, codec, durationMeta] = await Promise.all([
     track.getDisplayWidth(),
     track.getDisplayHeight(),
     track.getFirstTimestamp().catch(() => 0),
     track.getCodec().catch(() => null),
-    input.getDurationFromMetadata([track], { skipLiveWait: true }).catch(() => null),
-    track.computePacketStats(90, { skipLiveWait: true }).catch(() => null)
+    input.getDurationFromMetadata([track], { skipLiveWait: true }).catch(() => null)
   ]);
+
   const duration = Number.isFinite(durationMeta) && durationMeta > 0
     ? durationMeta
     : await track.computeDuration({ skipLiveWait: true }).catch(() => null);
+
+  const packetStats = includeStats
+    ? await track.computePacketStats(90, { skipLiveWait: true }).catch(() => null)
+    : null;
+
   const frameRate = Number.isFinite(packetStats?.averagePacketRate) && packetStats.averagePacketRate > 0
     ? packetStats.averagePacketRate
     : 30;
+
   return {
     width,
     height,
@@ -61,18 +67,20 @@ async function metadataOf(input, track) {
   };
 }
 
-function targetTimes(metadata, sampleCount) {
+function targetTimes(metadata, sampleCount, scanFraction = 1) {
   const count = Math.max(3, Math.min(24, Math.round(sampleCount || 12)));
   if (!metadata.duration) return [metadata.firstTimestamp];
-  const interval = metadata.duration / (count + 1);
+  const fraction = Math.max(0.1, Math.min(1, Number.isFinite(scanFraction) ? scanFraction : 1));
+  const windowDuration = metadata.duration * fraction;
+  const interval = windowDuration / (count + 1);
   return Array.from({ length: count }, (_, index) => metadata.firstTimestamp + interval * (index + 1));
 }
 
-async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCancel) {
+async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCancel, scanFraction = 1) {
   const canvas = createCanvas(metadata.width, metadata.height);
   const ctx = context2d(canvas);
   const sink = new VideoSampleSink(track);
-  const targets = targetTimes(metadata, sampleCount);
+  const targets = targetTimes(metadata, sampleCount, scanFraction);
   const frames = [];
   let targetIndex = 0;
 
@@ -84,7 +92,11 @@ async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCanc
       sample.draw(ctx, 0, 0, metadata.width, metadata.height);
       frames.push({ timestamp: sample.timestamp, imageData: ctx.getImageData(0, 0, metadata.width, metadata.height) });
       targetIndex++;
-      onProgress?.({ phase: 'detect', status: `Sampling frame ${frames.length}/${targets.length}`, progress: 0.05 + 0.45 * frames.length / targets.length });
+      onProgress?.({
+        phase: 'detect',
+        status: `Sampling frame ${frames.length}/${targets.length}`,
+        progress: 0.05 + 0.45 * frames.length / targets.length
+      });
     } finally {
       sample.close();
     }
@@ -92,15 +104,52 @@ async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCanc
   return frames;
 }
 
+function cropImageData(imageData, position) {
+  const width = Math.max(1, Math.round(position.width));
+  const height = Math.max(1, Math.round(position.height));
+  const x0 = Math.round(position.x);
+  const y0 = Math.round(position.y);
+  const data = new Uint8ClampedArray(width * height * 4);
+
+  for (let y = 0; y < height; y++) {
+    const sourceStart = ((y0 + y) * imageData.width + x0) * 4;
+    const sourceEnd = sourceStart + width * 4;
+    data.set(imageData.data.subarray(sourceStart, sourceEnd), y * width * 4);
+  }
+
+  return { width, height, data };
+}
+
+function createDetectionPreview(frames, detection, edgePolish = 0.35) {
+  if (!frames?.length || !detection?.position || !detection?.alphaMap) return null;
+  const frame = frames[Math.floor(frames.length / 2)];
+  const original = cropImageData(frame.imageData, detection.position);
+  let cleaned = inverseAlphaRestore(original, detection.alphaMap, detection.alphaGain ?? 1);
+  cleaned = applyEdgePolish(cleaned, detection.alphaMap, edgePolish);
+  return {
+    timestamp: frame.timestamp,
+    original,
+    cleaned
+  };
+}
+
 export async function inspectVideo(file, options = {}) {
   const input = createInput(file);
   const track = await input.getPrimaryVideoTrack();
   if (!track) { input.dispose(); throw new Error('No video track found'); }
   try {
-    const metadata = await metadataOf(input, track);
-    options.onProgress?.({ phase: 'detect', status: 'Reading metadata', progress: 0.03 });
-    const frames = await sampleFrames(track, metadata, options.sampleCount, options.onProgress, options.shouldCancel);
+    options.onProgress?.({ phase: 'detect', status: 'Reading metadata', progress: 0.02 });
+    const metadata = await metadataOf(input, track, { includeStats: false });
+    const frames = await sampleFrames(
+      track,
+      metadata,
+      options.sampleCount,
+      options.onProgress,
+      options.shouldCancel,
+      options.scanFraction ?? 1
+    );
     if (!frames.length) throw new Error('Could not sample video frames');
+
     options.onProgress?.({ phase: 'detect', status: 'Scoring watermark candidates', progress: 0.58 });
     const detection = await detectVideoWatermarkFromFrames({
       frames,
@@ -108,10 +157,13 @@ export async function inspectVideo(file, options = {}) {
       height: metadata.height,
       minConfidence: options.minConfidence ?? 0.12
     });
+
+    const preview = createDetectionPreview(frames, detection, options.edgePolish ?? 0.35);
     const publicDetection = { ...detection };
     delete publicDetection.alphaMap;
     delete publicDetection.frameScores;
-    return { metadata, detection: publicDetection, internalDetection: detection };
+
+    return { metadata, detection: publicDetection, preview, internalDetection: detection };
   } finally {
     input.dispose();
   }
@@ -170,18 +222,33 @@ function meanRoiLumaDelta(current, previous) {
 
 function frameGain(roi, alphaMap, requested, previous, adaptive, score) {
   if (!adaptive || score < 0.12) return requested;
-  const local = estimateAlphaGain({ width: roi.width, height: roi.height, data: roi.data }, { x: 0, y: 0, width: roi.width, height: roi.height }, alphaMap);
+  const local = estimateAlphaGain(
+    { width: roi.width, height: roi.height, data: roi.data },
+    { x: 0, y: 0, width: roi.width, height: roi.height },
+    alphaMap
+  );
   const blended = requested * 0.45 + local * 0.55;
   if (!Number.isFinite(previous)) return blended;
   return Math.max(previous - 0.04, Math.min(previous + 0.04, blended));
 }
 
+function normalizeRegion(region) {
+  if (!region || !Number.isFinite(region.x) || !Number.isFinite(region.y) || !Number.isFinite(region.size)) return null;
+  const size = Math.round(region.size);
+  return {
+    x: Math.round(region.x),
+    y: Math.round(region.y),
+    width: size,
+    height: size
+  };
+}
+
 export async function cleanVideo(file, options = {}) {
-  const manual = options.manual && Number.isFinite(options.manual.x) && Number.isFinite(options.manual.y) && Number.isFinite(options.manual.size)
-    ? options.manual
-    : null;
+  const manual = normalizeRegion(options.manual);
+  const detectedRegion = normalizeRegion(options.detectedRegion);
   let analysis = null;
-  if (!manual) {
+
+  if (!manual && !detectedRegion) {
     analysis = await inspectVideo(file, options);
     if (!analysis.internalDetection.detected && !options.forceCleanup) {
       throw new Error(`Watermark confidence ${analysis.internalDetection.confidence.toFixed(3)} is below threshold. Enable force cleanup or use manual mode.`);
@@ -191,15 +258,15 @@ export async function cleanVideo(file, options = {}) {
   const input = createInput(file);
   const track = await input.getPrimaryVideoTrack();
   if (!track) { input.dispose(); throw new Error('No video track found'); }
-  const metadata = await metadataOf(input, track);
-  const position = manual
-    ? { x: Math.round(manual.x), y: Math.round(manual.y), width: Math.round(manual.size), height: Math.round(manual.size) }
-    : analysis.internalDetection.position;
+  const metadata = await metadataOf(input, track, { includeStats: true });
+  const position = manual || detectedRegion || analysis.internalDetection.position;
+
   if (position.x < 0 || position.y < 0 || position.x + position.width > metadata.width || position.y + position.height > metadata.height) {
     input.dispose();
     throw new Error('Watermark region is outside the video frame');
   }
-  const alphaMap = manual
+
+  const alphaMap = manual || detectedRegion
     ? await getVideoAlphaMap(position.width)
     : analysis.internalDetection.alphaMap;
   const requestedGain = Number.isFinite(options.alphaGain) ? options.alphaGain : (analysis?.internalDetection.alphaGain ?? 1);
@@ -280,20 +347,22 @@ export async function cleanVideo(file, options = {}) {
         progress: 0.65 + 0.34 * Math.min(1, processedFrames / estimate)
       });
     }
+
     source.close();
     const audioResult = await audioPromise;
     await output.finalize();
     if (!target.buffer) throw new Error('Video export produced an empty buffer');
+
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.0',
+        version: '1.0.6',
         position,
         alphaGain: previousGain,
         processedFrames,
         skippedFrames,
         audio: audioResult,
-        detection: analysis?.detection || null
+        detection: analysis?.detection || (detectedRegion ? { detected: true, position } : null)
       }
     };
   } finally {
