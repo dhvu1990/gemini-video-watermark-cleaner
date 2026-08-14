@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.2 - 2026-08-14
+
+- Recorded successful GitHub Actions validation for PR #2: dependency install, pinned alpha-profile sync, syntax checks, unit tests, and Vite production build all passed.
+- Recorded successful squash merge of PR #2 into `main` as commit `1f0556623bc9d6ce318cad2ae533a286ac60cf89`.
+- Continued the permanent project execution log so merge and release state are not lost between iterations.
+
 ## 1.0.1 - 2026-08-14
 
 - Fixed GitHub Actions CI startup failure caused by `actions/setup-node@v4` using `cache: npm` without a committed npm lockfile.
