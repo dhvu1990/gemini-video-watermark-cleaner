@@ -1,6 +1,7 @@
 import { ALPHA_MAPS } from '../vendor/alphaPayload.js';
 
 const CACHE = new Map();
+const ACTIVE_CALIBRATION = new Map();
 
 function base64ToFloat32(base64) {
   if (!base64) return null;
@@ -26,6 +27,17 @@ function smoothstep(edge0, edge1, value) {
   if (edge0 === edge1) return value >= edge1 ? 1 : 0;
   const t = clamp((value - edge0) / (edge1 - edge0), 0, 1);
   return t * t * (3 - 2 * t);
+}
+
+export function setActiveAlphaCalibration(size, alphaMap, metadata = null) {
+  const safeSize = Math.max(16, Math.round(size));
+  if (!alphaMap || alphaMap.length !== safeSize * safeSize) return;
+  ACTIVE_CALIBRATION.set(safeSize, { alphaMap: new Float32Array(alphaMap), metadata: metadata ? { ...metadata } : null });
+}
+
+export function getActiveAlphaCalibration(size) {
+  const entry = ACTIVE_CALIBRATION.get(Math.max(16, Math.round(size)));
+  return entry ? { alphaMap: new Float32Array(entry.alphaMap), metadata: entry.metadata ? { ...entry.metadata } : null } : null;
 }
 
 export function buildProceduralFallbackAlpha(size = 96) {
@@ -115,6 +127,10 @@ function embeddedProfile(targetSize, profile) {
 
 export async function getVideoAlphaMap(targetSize, profile = 'auto', edgeBoost = 0) {
   const safeSize = Math.max(16, Math.round(targetSize));
+  if (profile === 'auto' && Number(edgeBoost || 0) === 0) {
+    const active = ACTIVE_CALIBRATION.get(safeSize);
+    if (active?.alphaMap) return new Float32Array(active.alphaMap);
+  }
   const profileKey = profile === 'auto' ? (safeSize < 40 ? '48' : '96-20260520') : String(profile);
   const safeBoost = clamp(Number(edgeBoost) || 0, 0, 0.12);
   const key = `${profileKey}:${safeSize}:edge${safeBoost.toFixed(3)}`;

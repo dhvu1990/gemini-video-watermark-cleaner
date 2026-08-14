@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
-  <title>Gemini Video Watermark Cleaner v1.0.9</title>
+  <title>Gemini Video Watermark Cleaner v1.0.10</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
@@ -12,8 +12,8 @@
     <header class="hero">
       <p class="eyebrow">LOCAL-FIRST VIDEO TOOL</p>
       <h1>Gemini Video Watermark Cleaner</h1>
-      <p>Automatic multi-frame detection, visual watermark preview, inverse-alpha restoration, and local MP4 export.</p>
-      <div class="badges"><span>v1.0.9</span><span>Auto detect</span><span>No upload</span><span>Web Worker</span><span>Edge cleanup</span><span>Result preview</span><span>Audio passthrough</span></div>
+      <p>Automatic multi-frame detection, alpha-shape calibration, inverse-alpha restoration, and local MP4 export.</p>
+      <div class="badges"><span>v1.0.10</span><span>Auto detect</span><span>Auto alpha calibration</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
     </header>
 
     <section class="panel">
@@ -28,13 +28,9 @@
 
     <section id="previewPanel" class="panel preview-panel hidden" aria-live="polite">
       <div class="preview-heading">
-        <div>
-          <p class="eyebrow">AUTO DETECTION PREVIEW</p>
-          <h2 id="analysisSummary">Waiting for video...</h2>
-        </div>
+        <div><p class="eyebrow">AUTO DETECTION PREVIEW</p><h2 id="analysisSummary">Waiting for video...</h2></div>
         <div id="previewNote" class="muted">Quick scan starts automatically after file selection.</div>
       </div>
-
       <div class="preview-layout">
         <div class="preview-main">
           <div id="previewStage" class="video-stage">
@@ -43,16 +39,9 @@
           </div>
           <div class="preview-caption">FULL FRAME — detected watermark region is outlined above.</div>
         </div>
-
         <div class="zoom-stack">
-          <div class="zoom-card">
-            <div class="zoom-title original-title">ZOOMED ORIGINAL</div>
-            <canvas id="originalZoom" width="72" height="72"></canvas>
-          </div>
-          <div class="zoom-card">
-            <div class="zoom-title cleaned-title">ZOOMED CLEANED</div>
-            <canvas id="cleanedZoom" width="72" height="72"></canvas>
-          </div>
+          <div class="zoom-card"><div class="zoom-title original-title">ZOOMED ORIGINAL</div><canvas id="originalZoom" width="72" height="72"></canvas></div>
+          <div class="zoom-card"><div class="zoom-title cleaned-title">ZOOMED CLEANED</div><canvas id="cleanedZoom" width="72" height="72"></canvas></div>
         </div>
       </div>
     </section>
@@ -77,10 +66,22 @@
           <label>Size<input id="wmSize" type="number" min="16" value="72" /></label>
         </div>
         <div class="row">
-          <label>Alpha gain<input id="alphaGain" type="number" min="0.5" max="1.4" step="0.01" value="1.00" /></label>
+          <label>Body gain<input id="alphaGain" type="number" min="0.5" max="1.4" step="0.01" value="1.00" /></label>
           <label>Edge polish<input id="edgePolish" type="number" min="0" max="1" step="0.05" value="0.35" /></label>
         </div>
-        <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive alpha with per-frame step cap</label>
+        <div class="calibration-card">
+          <strong>Auto alpha calibration</strong>
+          <div class="row triple">
+            <label>Profile<input id="calProfile" value="-" readonly /></label>
+            <label>Shape scale<input id="calShape" value="-" readonly /></label>
+            <label>Edge gain<input id="calEdgeGain" value="-" readonly /></label>
+          </div>
+          <div class="row">
+            <label>Edge boost<input id="calEdgeBoost" value="-" readonly /></label>
+            <label>Residual score<input id="calResidual" value="-" readonly /></label>
+          </div>
+        </div>
+        <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive body gain with per-frame step cap</label>
         <label class="check"><input id="temporalStabilize" type="checkbox" checked /> Temporal correction stabilization</label>
         <label class="check"><input id="forceCleanup" type="checkbox" /> Force cleanup when confidence is low</label>
       </div>
@@ -103,22 +104,16 @@
 
     <section id="resultPanel" class="panel result-preview hidden" aria-live="polite">
       <div class="preview-heading result-heading">
-        <div>
-          <p class="eyebrow">CLEANED RESULT</p>
-          <h2>4. Result preview</h2>
-        </div>
+        <div><p class="eyebrow">CLEANED RESULT</p><h2>4. Result preview</h2></div>
         <div id="resultSummary" class="muted">The cleaned MP4 will appear here after export completes.</div>
       </div>
-      <div class="result-video-wrap">
-        <video id="resultVideo" controls playsinline preload="metadata"></video>
-      </div>
+      <div class="result-video-wrap"><video id="resultVideo" controls playsinline preload="metadata"></video></div>
       <div class="preview-caption">CLEANED VIDEO — generated locally in this browser. Use the player to review before downloading.</div>
     </section>
 
-    <footer>
-      Use only on media you own or are authorized to edit. This project targets visible overlays only and does not attempt to remove invisible provenance watermarks such as SynthID.
-    </footer>
+    <footer>Use only on media you own or are authorized to edit. This project targets visible overlays only and does not attempt to remove invisible provenance watermarks such as SynthID.</footer>
   </main>
   <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/calibration-ui.js"></script>
 </body>
 </html>
