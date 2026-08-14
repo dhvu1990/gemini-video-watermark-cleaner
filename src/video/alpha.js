@@ -14,8 +14,6 @@ function base64ToFloat32(base64) {
   } else {
     throw new Error('No base64 decoder available');
   }
-
-  // Copy to an aligned standalone ArrayBuffer before viewing as Float32Array.
   const copy = new Uint8Array(bytes);
   return new Float32Array(copy.buffer);
 }
@@ -34,7 +32,6 @@ export function buildProceduralFallbackAlpha(size = 96) {
   const out = new Float32Array(size * size);
   const center = (size - 1) / 2;
   const scale = Math.max(1, center);
-
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const nx = Math.abs((x - center) / scale);
@@ -47,7 +44,6 @@ export function buildProceduralFallbackAlpha(size = 96) {
       out[y * size + x] = clamp(body * (0.12 + 0.35 * pinch) * (0.72 + 0.28 * soft), 0, 0.58);
     }
   }
-
   return out;
 }
 
@@ -55,7 +51,6 @@ export function resizeAlphaMapArea(sourceAlpha, sourceSize, targetSize) {
   if (sourceSize === targetSize) return new Float32Array(sourceAlpha);
   const out = new Float32Array(targetSize * targetSize);
   const scale = sourceSize / targetSize;
-
   for (let y = 0; y < targetSize; y++) {
     const yStart = y * scale;
     const yEnd = (y + 1) * scale;
@@ -85,6 +80,32 @@ export function resizeAlphaMapArea(sourceAlpha, sourceSize, targetSize) {
   return out;
 }
 
+export function enhanceAlphaEdges(alphaMap, size, edgeBoost = 0.045) {
+  const boost = clamp(Number(edgeBoost) || 0, 0, 0.12);
+  if (boost <= 0) return new Float32Array(alphaMap);
+  const out = new Float32Array(alphaMap);
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const p = y * size + x;
+      const a = alphaMap[p] || 0;
+      let localMax = a;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          localMax = Math.max(localMax, alphaMap[(y + dy) * size + x + dx] || 0);
+        }
+      }
+      if (localMax < 0.01) continue;
+      const gx = (alphaMap[p + 1] || 0) - (alphaMap[p - 1] || 0);
+      const gy = (alphaMap[p + size] || 0) - (alphaMap[p - size] || 0);
+      const gradient = Math.hypot(gx, gy);
+      const edgeEvidence = clamp((localMax - a) * 5 + gradient * 3, 0, 1);
+      const lowAlphaGate = 1 - smoothstep(0.18, 0.55, a);
+      out[p] = clamp(a + boost * edgeEvidence * lowAlphaGate, 0, 0.95);
+    }
+  }
+  return out;
+}
+
 function embeddedProfile(targetSize, profile) {
   const baseProfile = profile === 'auto'
     ? (targetSize < 40 ? '48' : '96-20260520')
@@ -92,22 +113,23 @@ function embeddedProfile(targetSize, profile) {
   return ALPHA_MAPS[baseProfile] || ALPHA_MAPS['96-20260520'] || ALPHA_MAPS['96'] || ALPHA_MAPS['48'] || null;
 }
 
-export async function getVideoAlphaMap(targetSize, profile = 'auto') {
+export async function getVideoAlphaMap(targetSize, profile = 'auto', edgeBoost = 0.045) {
   const safeSize = Math.max(16, Math.round(targetSize));
   const profileKey = profile === 'auto' ? (safeSize < 40 ? '48' : '96-20260520') : String(profile);
-  const key = `${profileKey}:${safeSize}`;
+  const safeBoost = clamp(Number(edgeBoost) || 0, 0, 0.12);
+  const key = `${profileKey}:${safeSize}:edge${safeBoost.toFixed(3)}`;
   if (CACHE.has(key)) return new Float32Array(CACHE.get(key));
 
   const encoded = embeddedProfile(safeSize, profile);
   let base = encoded ? base64ToFloat32(encoded) : null;
   let sourceSize = base ? Math.round(Math.sqrt(base.length)) : 0;
-
   if (!base || sourceSize * sourceSize !== base.length) {
     sourceSize = safeSize >= 40 ? 96 : 48;
     base = buildProceduralFallbackAlpha(sourceSize);
   }
 
   const resized = resizeAlphaMapArea(base, sourceSize, safeSize);
-  CACHE.set(key, resized);
-  return new Float32Array(resized);
+  const enhanced = safeSize >= 40 ? enhanceAlphaEdges(resized, safeSize, safeBoost) : resized;
+  CACHE.set(key, enhanced);
+  return new Float32Array(enhanced);
 }
