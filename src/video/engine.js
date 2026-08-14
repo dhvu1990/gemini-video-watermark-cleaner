@@ -34,21 +34,27 @@ function createInput(file) {
   return new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
 }
 
-async function metadataOf(input, track) {
-  const [width, height, firstTimestamp, codec, durationMeta, packetStats] = await Promise.all([
+async function metadataOf(input, track, { includeStats = false } = {}) {
+  const [width, height, firstTimestamp, codec, durationMeta] = await Promise.all([
     track.getDisplayWidth(),
     track.getDisplayHeight(),
     track.getFirstTimestamp().catch(() => 0),
     track.getCodec().catch(() => null),
-    input.getDurationFromMetadata([track], { skipLiveWait: true }).catch(() => null),
-    track.computePacketStats(90, { skipLiveWait: true }).catch(() => null)
+    input.getDurationFromMetadata([track], { skipLiveWait: true }).catch(() => null)
   ]);
+
   const duration = Number.isFinite(durationMeta) && durationMeta > 0
     ? durationMeta
     : await track.computeDuration({ skipLiveWait: true }).catch(() => null);
+
+  const packetStats = includeStats
+    ? await track.computePacketStats(90, { skipLiveWait: true }).catch(() => null)
+    : null;
+
   const frameRate = Number.isFinite(packetStats?.averagePacketRate) && packetStats.averagePacketRate > 0
     ? packetStats.averagePacketRate
     : 30;
+
   return {
     width,
     height,
@@ -84,7 +90,11 @@ async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCanc
       sample.draw(ctx, 0, 0, metadata.width, metadata.height);
       frames.push({ timestamp: sample.timestamp, imageData: ctx.getImageData(0, 0, metadata.width, metadata.height) });
       targetIndex++;
-      onProgress?.({ phase: 'detect', status: `Sampling frame ${frames.length}/${targets.length}`, progress: 0.05 + 0.45 * frames.length / targets.length });
+      onProgress?.({
+        phase: 'detect',
+        status: `Sampling frame ${frames.length}/${targets.length}`,
+        progress: 0.05 + 0.45 * frames.length / targets.length
+      });
     } finally {
       sample.close();
     }
@@ -92,15 +102,45 @@ async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCanc
   return frames;
 }
 
+function cropImageData(imageData, position) {
+  const width = Math.max(1, Math.round(position.width));
+  const height = Math.max(1, Math.round(position.height));
+  const x0 = Math.round(position.x);
+  const y0 = Math.round(position.y);
+  const data = new Uint8ClampedArray(width * height * 4);
+
+  for (let y = 0; y < height; y++) {
+    const sourceStart = ((y0 + y) * imageData.width + x0) * 4;
+    const sourceEnd = sourceStart + width * 4;
+    data.set(imageData.data.subarray(sourceStart, sourceEnd), y * width * 4);
+  }
+
+  return { width, height, data };
+}
+
+function createDetectionPreview(frames, detection, edgePolish = 0.35) {
+  if (!frames?.length || !detection?.position || !detection?.alphaMap) return null;
+  const frame = frames[Math.floor(frames.length / 2)];
+  const original = cropImageData(frame.imageData, detection.position);
+  let cleaned = inverseAlphaRestore(original, detection.alphaMap, detection.alphaGain ?? 1);
+  cleaned = applyEdgePolish(cleaned, detection.alphaMap, edgePolish);
+  return {
+    timestamp: frame.timestamp,
+    original,
+    cleaned
+  };
+}
+
 export async function inspectVideo(file, options = {}) {
   const input = createInput(file);
   const track = await input.getPrimaryVideoTrack();
   if (!track) { input.dispose(); throw new Error('No video track found'); }
   try {
-    const metadata = await metadataOf(input, track);
-    options.onProgress?.({ phase: 'detect', status: 'Reading metadata', progress: 0.03 });
+    options.onProgress?.({ phase: 'detect', status: 'Reading metadata', progress: 0.02 });
+    const metadata = await metadataOf(input, track, { includeStats: false });
     const frames = await sampleFrames(track, metadata, options.sampleCount, options.onProgress, options.shouldCancel);
     if (!frames.length) throw new Error('Could not sample video frames');
+
     options.onProgress?.({ phase: 'detect', status: 'Scoring watermark candidates', progress: 0.58 });
     const detection = await detectVideoWatermarkFromFrames({
       frames,
@@ -108,10 +148,13 @@ export async function inspectVideo(file, options = {}) {
       height: metadata.height,
       minConfidence: options.minConfidence ?? 0.12
     });
+
+    const preview = createDetectionPreview(frames, detection, options.edgePolish ?? 0.35);
     const publicDetection = { ...detection };
     delete publicDetection.alphaMap;
     delete publicDetection.frameScores;
-    return { metadata, detection: publicDetection, internalDetection: detection };
+
+    return { metadata, detection: publicDetection, preview, internalDetection: detection };
   } finally {
     input.dispose();
   }
@@ -170,7 +213,11 @@ function meanRoiLumaDelta(current, previous) {
 
 function frameGain(roi, alphaMap, requested, previous, adaptive, score) {
   if (!adaptive || score < 0.12) return requested;
-  const local = estimateAlphaGain({ width: roi.width, height: roi.height, data: roi.data }, { x: 0, y: 0, width: roi.width, height: roi.height }, alphaMap);
+  const local = estimateAlphaGain(
+    { width: roi.width, height: roi.height, data: roi.data },
+    { x: 0, y: 0, width: roi.width, height: roi.height },
+    alphaMap
+  );
   const blended = requested * 0.45 + local * 0.55;
   if (!Number.isFinite(previous)) return blended;
   return Math.max(previous - 0.04, Math.min(previous + 0.04, blended));
@@ -191,7 +238,7 @@ export async function cleanVideo(file, options = {}) {
   const input = createInput(file);
   const track = await input.getPrimaryVideoTrack();
   if (!track) { input.dispose(); throw new Error('No video track found'); }
-  const metadata = await metadataOf(input, track);
+  const metadata = await metadataOf(input, track, { includeStats: true });
   const position = manual
     ? { x: Math.round(manual.x), y: Math.round(manual.y), width: Math.round(manual.size), height: Math.round(manual.size) }
     : analysis.internalDetection.position;
@@ -287,7 +334,7 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.0',
+        version: '1.0.6',
         position,
         alphaGain: previousGain,
         processedFrames,
