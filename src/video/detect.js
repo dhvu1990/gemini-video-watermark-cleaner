@@ -73,7 +73,8 @@ function aggregate(scores) {
 }
 
 async function evaluateCandidate(frames, candidate) {
-  const alphaMap = await getVideoAlphaMap(candidate.size);
+  const detectionProfile = candidate.size < 40 ? '48' : '96-20260520';
+  const alphaMap = await getVideoAlphaMap(candidate.size, detectionProfile, 0);
   const scores = frames.map((frame) => scoreRegion(frame.imageData, candidate, alphaMap));
   return { candidate, alphaMap, scores, ...aggregate(scores) };
 }
