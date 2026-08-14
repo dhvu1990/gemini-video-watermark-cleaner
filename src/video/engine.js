@@ -131,7 +131,7 @@ function cropImageData(imageData, position) {
   return { width, height, data };
 }
 
-function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, history = []) {
+function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, history = [], allowMaskedDonors = false) {
   const original = cropRegion(paddedOriginal, inner.offsetX, inner.offsetY, inner.width, inner.height);
   let cleaned = inverseAlphaRestore(original, alphaMap, gain);
   cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
@@ -153,12 +153,14 @@ function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, h
     const atlas = buildBackgroundAtlas(paddedOriginal, history, paddedAlpha, {
       maxHistory: MAX_ATLAS_HISTORY,
       maxShift: 9,
-      minImprovement: 0.06
+      minImprovement: 0.06,
+      allowMaskedDonors
     });
     atlasSummary = summarizeAtlas(atlas);
-    if (atlasSummary.donorCount >= 2 && atlasSummary.supportedPixels >= Math.max(24, inner.width)) {
-      repaired = applyBackgroundAtlas(repaired, paddedAlpha, atlas, 0.94);
-    } else {
+    const minimumDonors = allowMaskedDonors ? 3 : 2;
+    if (atlasSummary.donorCount >= minimumDonors && atlasSummary.supportedPixels >= Math.max(24, inner.width)) {
+      repaired = applyBackgroundAtlas(repaired, paddedAlpha, atlas, allowMaskedDonors ? 0.88 : 0.94);
+    } else if (!allowMaskedDonors) {
       const previousPadded = history[history.length - 1];
       if (previousPadded) repaired = applyTemporalDonorRepair(repaired, paddedOriginal, previousPadded, paddedAlpha, 0.52);
     }
@@ -195,7 +197,8 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     detection.alphaMap,
     detection.alphaGain ?? 1,
     edgePolish,
-    history
+    history,
+    false
   );
   return {
     timestamp: frame.timestamp,
@@ -408,10 +411,11 @@ export async function cleanVideo(file, options = {}) {
             alphaMap,
             gain,
             options.edgePolish ?? 0.35,
-            options.temporalStabilize !== false ? history : []
+            options.temporalStabilize !== false ? history : [],
+            options.temporalStabilize !== false
           );
           let processed = repaired.cleaned;
-          if (repaired.atlasSummary?.donorCount >= 2) {
+          if (repaired.atlasSummary?.donorCount >= 3) {
             atlasFrames++;
             atlasDonorsPeak = Math.max(atlasDonorsPeak, repaired.atlasSummary.donorCount);
           }
@@ -421,7 +425,7 @@ export async function cleanVideo(file, options = {}) {
           const finalPadded = pasteRegion(repaired.repairedPadded, processed, inner.offsetX, inner.offsetY);
           ctx.putImageData(toImageDataLike(finalPadded), expanded.x, expanded.y);
           previousTemporal = { original, processed, paddedOriginal };
-          history.push(paddedOriginal);
+          history.push(finalPadded);
           if (history.length > MAX_ATLAS_HISTORY) history.shift();
         } else {
           skippedFrames++;
