@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.14 - 2026-08-14
+
+- Added a bounded multi-frame background atlas for watermark reconstruction after full detection/calibration.
+- Atlas motion-aligns up to 8 recent padded ROI frames using clean border pixels around the watermark.
+- Raw-frame preview donors remain conservative and only contribute pixels outside the fixed watermark mask.
+- Full-video export stores previously repaired padded frames and can use masked donor consensus only when at least 3 aligned donors agree, allowing the atlas to reconstruct deeper parts of the watermark footprint rather than just the outer edge.
+- Donor colors are combined with a per-channel median so one bad donor or residual artifact has less influence than single-frame copying.
+- Atlas confidence combines donor support count and motion-alignment improvement; low-support pixels fall back to the existing padded spatial repair instead of being forced.
+- Scene cuts and skipped low-confidence frames clear the atlas history so donors never cross shots.
+- Export metadata now records how many frames used atlas support, the peak donor count, and history limit.
+- Added synthetic tests for motion-shift estimation, safe raw donors, and cleaned-donor consensus inside the watermark footprint.
+- Updated UI/package/export metadata to v1.0.14.
+- Detailed journal: `logs/2026-08-14-v1.0.14-multi-frame-background-atlas.md`.
+
 ## 1.0.13 - 2026-08-14
 
 - Added a residual-quality gate to progressive analysis: quick scans with calibration residual score above 18 automatically expand to the configured full scan even when position confidence is high.
