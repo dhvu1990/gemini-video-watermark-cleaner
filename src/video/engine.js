@@ -13,8 +13,17 @@ import {
 import { detectVideoWatermarkFromFrames, estimateAlphaGain, scoreRegion } from './detect.js';
 import { getVideoAlphaMap } from './alpha.js';
 import { applyEdgePolish, inverseAlphaRestore, stabilizeCorrection, toImageDataLike } from './restore.js';
+import {
+  applyPaddedTextureRepair,
+  applyTemporalDonorRepair,
+  cropRegion,
+  embedAlphaMap,
+  expandedRegion,
+  pasteRegion
+} from './textureRepair.js';
 
 const DEFAULT_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
+const REPAIR_PADDING = 14;
 
 function createCanvas(width, height) {
   if (typeof OffscreenCanvas !== 'undefined') return new OffscreenCanvas(width, height);
@@ -120,16 +129,58 @@ function cropImageData(imageData, position) {
   return { width, height, data };
 }
 
+function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, previousPadded = null) {
+  const original = cropRegion(paddedOriginal, inner.offsetX, inner.offsetY, inner.width, inner.height);
+  let cleaned = inverseAlphaRestore(original, alphaMap, gain);
+  cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
+
+  const paddedAlpha = embedAlphaMap(
+    alphaMap,
+    inner.width,
+    inner.height,
+    paddedOriginal.width,
+    paddedOriginal.height,
+    inner.offsetX,
+    inner.offsetY
+  );
+  let repaired = pasteRegion(paddedOriginal, cleaned, inner.offsetX, inner.offsetY);
+  repaired = applyPaddedTextureRepair(repaired, paddedAlpha, 0.72);
+  if (previousPadded) repaired = applyTemporalDonorRepair(repaired, paddedOriginal, previousPadded, paddedAlpha, 0.66);
+
+  return {
+    original,
+    cleaned: cropRegion(repaired, inner.offsetX, inner.offsetY, inner.width, inner.height),
+    repairedPadded: repaired,
+    paddedAlpha
+  };
+}
+
 function createDetectionPreview(frames, detection, edgePolish = 0.35) {
   if (!frames?.length || !detection?.position || !detection?.alphaMap) return null;
-  const frame = frames[Math.floor(frames.length / 2)];
-  const original = cropImageData(frame.imageData, detection.position);
-  let cleaned = inverseAlphaRestore(original, detection.alphaMap, detection.alphaGain ?? 1);
-  cleaned = applyEdgePolish(cleaned, detection.alphaMap, edgePolish);
+  const index = Math.floor(frames.length / 2);
+  const frame = frames[index];
+  const expanded = expandedRegion(detection.position, frame.imageData.width, frame.imageData.height, REPAIR_PADDING);
+  const padded = cropImageData(frame.imageData, expanded);
+  const previousFrame = index > 0 ? frames[index - 1] : null;
+  const previousPadded = previousFrame ? cropImageData(previousFrame.imageData, expanded) : null;
+  const inner = {
+    offsetX: expanded.offsetX,
+    offsetY: expanded.offsetY,
+    width: detection.position.width,
+    height: detection.position.height
+  };
+  const repaired = repairPaddedRegion(
+    padded,
+    inner,
+    detection.alphaMap,
+    detection.alphaGain ?? 1,
+    edgePolish,
+    previousPadded
+  );
   return {
     timestamp: frame.timestamp,
-    original,
-    cleaned
+    original: repaired.original,
+    cleaned: repaired.cleaned
   };
 }
 
@@ -272,6 +323,8 @@ export async function cleanVideo(file, options = {}) {
     ? await getVideoAlphaMap(position.width)
     : analysis.internalDetection.alphaMap;
   const requestedGain = Number.isFinite(options.alphaGain) ? options.alphaGain : (analysis?.internalDetection.alphaGain ?? 1);
+  const expanded = expandedRegion(position, metadata.width, metadata.height, REPAIR_PADDING);
+  const inner = { offsetX: expanded.offsetX, offsetY: expanded.offsetY, width: position.width, height: position.height };
 
   const canvas = createCanvas(metadata.width, metadata.height);
   const ctx = context2d(canvas);
@@ -311,7 +364,8 @@ export async function cleanVideo(file, options = {}) {
       try {
         if (options.shouldCancel?.()) throw new DOMException('Cancelled', 'AbortError');
         sample.draw(ctx, 0, 0, metadata.width, metadata.height);
-        const original = ctx.getImageData(position.x, position.y, position.width, position.height);
+        const paddedOriginal = ctx.getImageData(expanded.x, expanded.y, expanded.width, expanded.height);
+        const original = cropRegion(paddedOriginal, inner.offsetX, inner.offsetY, inner.width, inner.height);
         const score = scoreRegion(original, { x: 0, y: 0, width: position.width, height: position.height }, alphaMap).confidence;
         const shouldProcess = options.forceCleanup || manual || score >= lowGate;
         if (shouldProcess) {
@@ -323,13 +377,21 @@ export async function cleanVideo(file, options = {}) {
           }
           const gain = frameGain(original, alphaMap, requestedGain, previousGain, options.adaptiveAlpha !== false, score);
           previousGain = gain;
-          let processed = inverseAlphaRestore(original, alphaMap, gain);
-          processed = applyEdgePolish(processed, alphaMap, options.edgePolish ?? 0.35);
+          const repaired = repairPaddedRegion(
+            paddedOriginal,
+            inner,
+            alphaMap,
+            gain,
+            options.edgePolish ?? 0.35,
+            options.temporalStabilize !== false ? previousTemporal?.paddedOriginal : null
+          );
+          let processed = repaired.cleaned;
           if (options.temporalStabilize !== false) {
-            processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.7);
+            processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.55);
           }
-          ctx.putImageData(toImageDataLike(processed), position.x, position.y);
-          previousTemporal = { original, processed };
+          const finalPadded = pasteRegion(repaired.repairedPadded, processed, inner.offsetX, inner.offsetY);
+          ctx.putImageData(toImageDataLike(finalPadded), expanded.x, expanded.y);
+          previousTemporal = { original, processed, paddedOriginal };
         } else {
           skippedFrames++;
           previousTemporal = null;
@@ -358,12 +420,13 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.11',
+        version: '1.0.13',
         position,
         alphaGain: previousGain,
         processedFrames,
         skippedFrames,
         audio: audioResult,
+        repair: { padding: REPAIR_PADDING, paddedTexture: true, temporalDonor: options.temporalStabilize !== false },
         detection: analysis?.detection || (detectedRegion ? { detected: true, position } : null)
       }
     };
