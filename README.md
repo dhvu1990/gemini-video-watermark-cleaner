@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.11** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.17** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -19,30 +19,32 @@ The implementation is independently structured, video-focused and local-first. S
 https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 ```
 
-## v1.0.11 highlights
+## v1.0.17 highlights
 
-- Fixes the real-video regression observed in v1.0.10 where calibration could over-darken the watermark center while still leaving the diamond outline visible.
-- Body gain is now calibrated independently before the profile/shape/edge search rather than being fixed to the detector's first opacity estimate.
-- Body-gain candidates explicitly include values below the detector estimate, allowing the cleaner to recover when the estimate is too aggressive.
-- Candidate scoring now emphasizes **background continuity**: cleaned pixels inside the watermark are compared with interpolated safe background anchors outside the alpha footprint.
-- Adds penalties for clipped/over-dark pixels and for changing pixels outside the watermark footprint.
-- Edge/profile search remains bounded to 54 shape candidates for browser performance.
-- Adaptive per-frame body gain is now clamped to within ±0.06 of the calibrated gain and changes by at most ±0.025 per frame, preventing export from drifting back toward an overestimated value.
-- The detector geometry/catalog path remains unchanged; v1.0.11 only changes post-detection calibration and gain stability.
+- Keeps the v1.0.16 detail-preserving core and normal-direction edge bridge that substantially reduced the visible Gemini outline in real-video testing.
+- Adds **subpixel alpha registration** after coarse alpha calibration so the alpha footprint can move by `-0.4 / 0 / +0.4 px` in X and Y without moving the video or integer detector box.
+- Tightens shape-scale search to `0.985 / 1.000 / 1.015`, reflecting that the remaining artifact is now a thin anti-aliased edge rather than a large footprint mismatch.
+- Uses a two-stage bounded search: 54 coarse profile/shape/edge candidates, then only 9 subpixel registrations around the coarse winner.
+- Splits calibration diagnostics into **Edge**, **Low body**, **High body**, and outside/near-zero residual buckets.
+- Weights edge residual most strongly while preserving penalties for body damage, so calibration can target a thin outline without flattening the restored core texture.
+- Shows selected Offset X/Y and residual buckets directly in the Tune panel.
+- Detector/catalog integer geometry remains unchanged; v1.0.17 improves alpha registration inside the already-correct 72x72 watermark ROI.
 
 ## Main features
 
 - 100% local video processing in the browser; no media upload.
 - MP4/MOV/M4V/WebM file selection with MIME/extension fallback.
-- Automatic quick detection after file selection with full-scan fallback.
+- Automatic quick detection after file selection with residual-gated full-scan fallback.
 - Full-frame preview with detected Gemini bounding box.
 - `ZOOMED ORIGINAL` and `ZOOMED CLEANED` ROI previews generated in a Web Worker.
-- Automatic body + edge alpha calibration for the detected watermark footprint.
+- Automatic body + edge alpha calibration with fractional X/Y registration.
 - Known 1080p, 720p and portrait Veo geometry candidates with local coordinate refinement.
 - Spatial + gradient correlation detector.
 - Fail-closed confidence threshold plus manual override/force-cleanup fallback.
-- Inverse-alpha restoration, bounded adaptive per-frame body gain, scene-cut reset and temporal stabilization.
-- Edge-weighted alpha gain plus residual edge/footprint cleanup for the visible diamond border.
+- Inverse-alpha restoration, bounded adaptive per-frame body gain and scene-cut reset.
+- Hybrid detail-preserving core / aggressive edge-ring repair.
+- Normal-direction edge bridge for thin residual outlines.
+- Optional padded temporal donor and multi-frame atlas support.
 - MediaBunny/WebCodecs AVC MP4 export with compatible encoded-audio passthrough.
 - Direct cleaned-video result preview in the browser before download.
 - Progress reporting, cancellation, tests, CI and GitHub Pages deployment.
@@ -57,7 +59,7 @@ npm run setup:alpha
 npm run dev
 ```
 
-Choose or drop a Gemini/Veo video. Analysis starts automatically. A high-confidence quick result is shown after position detection and alpha calibration; otherwise the app expands to the configured full scan. Use **Re-analyze full video** only when you explicitly want another detector/calibration pass.
+Choose or drop a Gemini/Veo video. Analysis starts automatically. A high-confidence quick result is shown only when both detector confidence and calibration quality are acceptable; otherwise the app expands to the configured full scan. Use **Re-analyze full video** only when you explicitly want another detector/calibration pass.
 
 After **Clean video** completes, review the generated MP4 directly in **4. Result preview**. Download it only after the in-browser playback looks correct.
 
@@ -73,25 +75,28 @@ Local video
   -> local browser preview
   -> Worker quick scan: 3 frames from first 18%
   -> catalog candidates + spatial/gradient scoring
-  -> local coordinate refinement
+  -> integer local coordinate refinement
   -> initial body alpha-gain estimate
-  -> independent body-gain search using background continuity
+  -> independent body-gain search
   -> bounded profile + shape scale + edge boost + edge gain search
+  -> subpixel alpha registration (-0.4 / 0 / +0.4 px X/Y)
+  -> Edge / Low-body / High-body residual scoring
   -> selected calibrated alpha map + calibrated body gain
   -> show box + calibrated ROI preview
-  -> automatically run full scan only if quick detection is not strong enough
+  -> automatically run full scan when quick detection/calibration is not strong enough
 ```
 
 ## Cleanup/export pipeline
 
 ```text
-Detected region + calibrated alpha map
+Detected region + subpixel-calibrated alpha map
   -> per-frame confidence gate
   -> adaptive body gain clamped around calibrated value
   -> inverse-alpha restoration
-  -> calibrated edge gain/footprint
-  -> masked edge polish
-  -> residual footprint cleanup + structure guard
+  -> detail-preserving hybrid core/ring repair
+  -> padded texture repair
+  -> optional temporal donor / multi-frame atlas
+  -> normal-direction edge bridge
   -> temporal correction stabilization
   -> WebCodecs AVC encode
   -> encoded audio passthrough
@@ -112,14 +117,16 @@ Detected region + calibrated alpha map
 
 - **Full scan frames**: 12 is the normal fallback. Increase for unusually long or highly edited videos.
 - **Min confidence**: default 0.12; quick acceptance is deliberately stricter.
-- **Body gain**: automatically calibrated main watermark opacity. v1.0.11 can reduce it below the initial detector estimate when the preview becomes too dark.
-- **Edge gain**: selected automatically by calibration and displayed read-only. It targets low-alpha/gradient regions rather than multiplying the entire watermark.
-- **Shape scale**: selected alpha-footprint scale around the watermark center.
-- **Edge boost**: selected low-alpha edge enhancement used to better cover the visible outline.
-- **Residual score**: calibration objective; lower is better within the tested candidate set, but visual review remains the final quality check.
-- **Edge polish**: default 0.35. Residual footprint cleanup is bounded, so avoid raising this aggressively unless testing shows it is needed.
-- **Adaptive body gain**: recommended; v1.0.11 constrains it around the calibrated value to avoid drift.
-- **Temporal stabilization**: recommended for static/slow backgrounds.
+- **Body gain**: automatically calibrated main watermark opacity.
+- **Shape scale**: selected alpha-footprint scale around the watermark center; v1.0.17 uses a narrow search around 1.0.
+- **Offset X / Y**: fractional alpha-map registration in pixels. These values do not move the detector bounding box or source video.
+- **Edge gain / Edge boost**: alpha adjustments focused on low-alpha/gradient regions.
+- **Total residual**: combined calibration objective; lower is better within the candidate set.
+- **Edge residual**: thin-outline/anti-alias mismatch indicator. When this remains high while body residuals are low, registration/edge fitting should improve instead of stronger body cleanup.
+- **Low-body / High-body residual**: diagnostics for interior watermark reconstruction; high values warn against aggressive edge changes that damage core texture.
+- **Edge polish**: default 0.35. Avoid raising aggressively unless visual testing justifies it.
+- **Adaptive body gain**: recommended; constrained around the calibrated value to avoid drift.
+- **Detail core + edge bridge + atlas**: recommended for real video; core protection remains active even when temporal donors are available.
 - **Manual override / Force cleanup**: only when automatic detection is uncertain.
 
 ## Production build
@@ -138,9 +145,9 @@ The generated `dist/` directory is static and is deployed by `.github/workflows/
 
 - Video is re-encoded to AVC/H.264 MP4; export is not lossless.
 - Audio is copied only when its encoded codec can be placed directly into MP4.
-- Background-continuity calibration is heuristic and assumes nearby low-alpha pixels are useful anchors; complex moving textures can still be difficult.
-- The calibration grid is intentionally bounded for browser performance; a future watermark variant may still require new profiles or wider search ranges.
-- Highly textured backgrounds may still show some residual artifacts even after calibration.
+- Residual scoring and background-continuity estimation are heuristic; very complex moving texture can still be difficult.
+- The subpixel grid is intentionally bounded for browser performance rather than an exhaustive optimizer.
+- Chroma-subsampling halos from compressed video may remain even after luma/alpha registration is correct; a future quality tier may need chroma-aware edge correction.
 - ML/FDnCNN remains an optional future quality tier rather than a default dependency.
 
 ## Responsible use
