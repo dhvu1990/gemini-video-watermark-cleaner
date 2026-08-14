@@ -1,5 +1,7 @@
+import { formatFileSize, validateVideoFile } from './video/file.js';
+
 const els = Object.fromEntries([
-  'fileInput','dropZone','fileInfo','sampleCount','minConfidence','analyzeBtn','detectResult',
+  'fileInput','chooseFileBtn','dropZone','fileInfo','sampleCount','minConfidence','analyzeBtn','detectResult',
   'manualMode','wmX','wmY','wmSize','alphaGain','edgePolish','adaptiveAlpha','temporalStabilize',
   'forceCleanup','bitrate','lowGate','cleanBtn','cancelBtn','downloadBtn','progressBar','status'
 ].map((id) => [id, document.getElementById(id)]));
@@ -15,11 +17,17 @@ function setBusy(value) {
   els.analyzeBtn.disabled = !file || value;
   els.cleanBtn.disabled = !file || value;
   els.cancelBtn.disabled = !value;
+  els.chooseFileBtn.disabled = value;
 }
 
 function setStatus(text, progress = null) {
   els.status.textContent = text;
   if (progress !== null) els.progressBar.style.width = `${Math.max(0, Math.min(100, progress * 100))}%`;
+}
+
+function setFileMessage(text, isError = false) {
+  els.fileInfo.textContent = text;
+  els.fileInfo.classList.toggle('error', isError);
 }
 
 function ensureWorker() {
@@ -77,23 +85,47 @@ function handleWorkerMessage(event) {
   }
 }
 
+function clearSelectedFile(reason = 'No video selected.') {
+  file = null;
+  detection = null;
+  setFileMessage(reason, reason !== 'No video selected.');
+  els.detectResult.textContent = 'Waiting for video...';
+  els.downloadBtn.classList.add('disabled');
+  els.downloadBtn.setAttribute('aria-disabled', 'true');
+  setBusy(false);
+}
+
 function useFile(nextFile) {
   if (!nextFile) return;
-  if (!nextFile.type.startsWith('video/')) {
-    setStatus('Please choose a video file.');
+
+  const validation = validateVideoFile(nextFile);
+  if (!validation.ok) {
+    clearSelectedFile(validation.reason);
+    setStatus(validation.reason, 0);
     return;
   }
+
   file = nextFile;
   detection = null;
-  els.fileInfo.textContent = `${file.name} - ${(file.size / 1024 / 1024).toFixed(1)} MB`;
+  setFileMessage(`${file.name} - ${formatFileSize(file.size)} - ${validation.mime}`);
   els.detectResult.textContent = 'Video loaded. Run analysis for multi-frame detection.';
   els.downloadBtn.classList.add('disabled');
   els.downloadBtn.setAttribute('aria-disabled', 'true');
   setBusy(false);
-  setStatus('Video loaded.', 0);
+  setStatus('Video loaded. Click Analyze watermark.', 0);
 }
 
-els.fileInput.addEventListener('change', () => useFile(els.fileInput.files?.[0]));
+els.chooseFileBtn.addEventListener('click', () => {
+  if (busy) return;
+  els.fileInput.value = '';
+  els.fileInput.click();
+});
+
+els.fileInput.addEventListener('change', () => {
+  const selected = els.fileInput.files?.[0];
+  if (selected) useFile(selected);
+});
+
 for (const type of ['dragenter', 'dragover']) {
   els.dropZone.addEventListener(type, (event) => { event.preventDefault(); els.dropZone.classList.add('drag'); });
 }
