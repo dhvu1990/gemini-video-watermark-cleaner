@@ -67,18 +67,20 @@ async function metadataOf(input, track, { includeStats = false } = {}) {
   };
 }
 
-function targetTimes(metadata, sampleCount) {
+function targetTimes(metadata, sampleCount, scanFraction = 1) {
   const count = Math.max(3, Math.min(24, Math.round(sampleCount || 12)));
   if (!metadata.duration) return [metadata.firstTimestamp];
-  const interval = metadata.duration / (count + 1);
+  const fraction = Math.max(0.1, Math.min(1, Number.isFinite(scanFraction) ? scanFraction : 1));
+  const windowDuration = metadata.duration * fraction;
+  const interval = windowDuration / (count + 1);
   return Array.from({ length: count }, (_, index) => metadata.firstTimestamp + interval * (index + 1));
 }
 
-async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCancel) {
+async function sampleFrames(track, metadata, sampleCount, onProgress, shouldCancel, scanFraction = 1) {
   const canvas = createCanvas(metadata.width, metadata.height);
   const ctx = context2d(canvas);
   const sink = new VideoSampleSink(track);
-  const targets = targetTimes(metadata, sampleCount);
+  const targets = targetTimes(metadata, sampleCount, scanFraction);
   const frames = [];
   let targetIndex = 0;
 
@@ -138,7 +140,14 @@ export async function inspectVideo(file, options = {}) {
   try {
     options.onProgress?.({ phase: 'detect', status: 'Reading metadata', progress: 0.02 });
     const metadata = await metadataOf(input, track, { includeStats: false });
-    const frames = await sampleFrames(track, metadata, options.sampleCount, options.onProgress, options.shouldCancel);
+    const frames = await sampleFrames(
+      track,
+      metadata,
+      options.sampleCount,
+      options.onProgress,
+      options.shouldCancel,
+      options.scanFraction ?? 1
+    );
     if (!frames.length) throw new Error('Could not sample video frames');
 
     options.onProgress?.({ phase: 'detect', status: 'Scoring watermark candidates', progress: 0.58 });
@@ -223,12 +232,23 @@ function frameGain(roi, alphaMap, requested, previous, adaptive, score) {
   return Math.max(previous - 0.04, Math.min(previous + 0.04, blended));
 }
 
+function normalizeRegion(region) {
+  if (!region || !Number.isFinite(region.x) || !Number.isFinite(region.y) || !Number.isFinite(region.size)) return null;
+  const size = Math.round(region.size);
+  return {
+    x: Math.round(region.x),
+    y: Math.round(region.y),
+    width: size,
+    height: size
+  };
+}
+
 export async function cleanVideo(file, options = {}) {
-  const manual = options.manual && Number.isFinite(options.manual.x) && Number.isFinite(options.manual.y) && Number.isFinite(options.manual.size)
-    ? options.manual
-    : null;
+  const manual = normalizeRegion(options.manual);
+  const detectedRegion = normalizeRegion(options.detectedRegion);
   let analysis = null;
-  if (!manual) {
+
+  if (!manual && !detectedRegion) {
     analysis = await inspectVideo(file, options);
     if (!analysis.internalDetection.detected && !options.forceCleanup) {
       throw new Error(`Watermark confidence ${analysis.internalDetection.confidence.toFixed(3)} is below threshold. Enable force cleanup or use manual mode.`);
@@ -239,14 +259,14 @@ export async function cleanVideo(file, options = {}) {
   const track = await input.getPrimaryVideoTrack();
   if (!track) { input.dispose(); throw new Error('No video track found'); }
   const metadata = await metadataOf(input, track, { includeStats: true });
-  const position = manual
-    ? { x: Math.round(manual.x), y: Math.round(manual.y), width: Math.round(manual.size), height: Math.round(manual.size) }
-    : analysis.internalDetection.position;
+  const position = manual || detectedRegion || analysis.internalDetection.position;
+
   if (position.x < 0 || position.y < 0 || position.x + position.width > metadata.width || position.y + position.height > metadata.height) {
     input.dispose();
     throw new Error('Watermark region is outside the video frame');
   }
-  const alphaMap = manual
+
+  const alphaMap = manual || detectedRegion
     ? await getVideoAlphaMap(position.width)
     : analysis.internalDetection.alphaMap;
   const requestedGain = Number.isFinite(options.alphaGain) ? options.alphaGain : (analysis?.internalDetection.alphaGain ?? 1);
@@ -327,10 +347,12 @@ export async function cleanVideo(file, options = {}) {
         progress: 0.65 + 0.34 * Math.min(1, processedFrames / estimate)
       });
     }
+
     source.close();
     const audioResult = await audioPromise;
     await output.finalize();
     if (!target.buffer) throw new Error('Video export produced an empty buffer');
+
     return {
       buffer: target.buffer,
       meta: {
@@ -340,7 +362,7 @@ export async function cleanVideo(file, options = {}) {
         processedFrames,
         skippedFrames,
         audio: audioResult,
-        detection: analysis?.detection || null
+        detection: analysis?.detection || (detectedRegion ? { detected: true, position } : null)
       }
     };
   } finally {
