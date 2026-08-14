@@ -2,7 +2,7 @@
 
 ## Target
 
-Primary deployment target for v1.0.3:
+Primary deployment target:
 
 ```text
 GitHub Pages
@@ -11,11 +11,42 @@ https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 
 The project is a static Vite application. Runtime video processing stays in the user's browser; the deployment only serves HTML, CSS, JavaScript, workers, and bundled alpha-profile data.
 
+## Current status - 2026-08-14
+
+The first production deployment attempt was triggered after v1.0.3 merged into `main`.
+
+GitHub Actions run:
+
+- Workflow: `Deploy GitHub Pages`
+- Run ID: `31772735481`
+- Build job ID: `94681809508`
+- Main commit: `0e0fd31fa048b84ce99e8f6a5fc062ed7316b26b`
+
+Successful steps:
+
+- checkout - PASS
+- Node.js 22 setup - PASS
+- `npm install --no-audit --no-fund` - PASS
+- `npm run setup:alpha` - PASS
+- `npm run check` - PASS
+- `npm test` - PASS, 5/5
+- `npm run build` - PASS
+
+The Vite build completed successfully and produced `dist/` including the application bundle and Web Worker.
+
+Deployment then stopped at `actions/configure-pages@v6` with:
+
+```text
+Get Pages site failed. Please verify that the repository has Pages enabled and configured to build using GitHub Actions.
+```
+
+This confirms the application build is ready; the remaining blocker is repository-level GitHub Pages enablement.
+
 ## Repository state
 
 - Repository: `dhvu1990/gemini-video-watermark-cleaner`
 - Default branch: `main`
-- Repository visibility at v1.0.3 preparation: private
+- Repository visibility: private
 - Deployment workflow: `.github/workflows/deploy-pages.yml`
 - Vite base: `./`
 
@@ -29,16 +60,28 @@ For a private repository owned by a personal account, GitHub Pages requires a Gi
 
 Do not place secrets, API keys, private customer data, or private source-only information into files that are included in `dist/`.
 
-## One-time GitHub UI configuration
+## Required one-time GitHub UI configuration
 
-If the deploy workflow reports that GitHub Pages is not configured:
-
-1. Open the repository on GitHub.
+1. Open `dhvu1990/gemini-video-watermark-cleaner` on GitHub.
 2. Open **Settings**.
 3. In **Code and automation**, open **Pages**.
 4. Under **Build and deployment**, set **Source** to **GitHub Actions**.
 5. Save/apply if GitHub presents a confirmation.
-6. Re-run the failed `Deploy GitHub Pages` workflow, or push a new validated release to `main`.
+6. Re-run the failed `Deploy GitHub Pages` workflow.
+
+If GitHub does not offer Pages for this private repository and instead shows an upgrade requirement, the options are:
+
+- use a GitHub plan that supports Pages for private repositories,
+- make the repository public only if exposing the source is acceptable,
+- or deploy `dist/` to another suitable static host/internal web server.
+
+## Why the workflow does not auto-enable Pages
+
+`actions/configure-pages` has an `enablement` option, but its current action definition explicitly requires a token **other than** the default `GITHUB_TOKEN` when automatic enablement is requested.
+
+For a Personal Access Token, suitable repository/Pages write permissions are required. For a GitHub App token, administration-write and Pages-write permissions are required.
+
+This repository intentionally does not introduce or store an additional privileged PAT just to bypass the one-time Pages setting. The safer path at this stage is the repository Settings action above.
 
 ## Deployment workflow
 

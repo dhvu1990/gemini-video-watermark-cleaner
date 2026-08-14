@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.4 - 2026-08-14
+
+- Recorded successful v1.0.3 CI validation on PR #4 using `actions/checkout@v7` and `actions/setup-node@v7`.
+- Recorded successful squash merge of v1.0.3 into `main` as commit `0e0fd31fa048b84ce99e8f6a5fc062ed7316b26b`.
+- Recorded the first production Pages deployment attempt: install, alpha sync, syntax checks, 5/5 tests, and Vite build all passed.
+- Recorded the deployment blocker: `actions/configure-pages@v6` returned `Get Pages site failed` because GitHub Pages is not yet enabled/configured for the repository.
+- Documented that automatic Pages enablement requires a token other than the default `GITHUB_TOKEN`; the repository therefore keeps a one-time manual Settings -> Pages -> GitHub Actions enablement step.
+- Bumped package and README version to `1.0.4` while leaving this release unmerged until Pages is enabled.
+
 ## 1.0.3 - 2026-08-14
 
 - Added a GitHub Pages production deployment workflow that builds, validates, uploads, and deploys the Vite `dist/` artifact from `main`.

@@ -353,7 +353,7 @@ Added/updated:
 - `CHANGELOG.md`: v1.0.3 release notes.
 - `PROJECT_LOG.md`: this complete deployment/release history.
 
-### v1.0.3 branch commits created so far
+### v1.0.3 branch commits
 
 - `061fc94877b199f9e00a7cbb7be5dc095bb84e9b` - `feat: add GitHub Pages deployment workflow`
 - `73d57b51c7d33537328ef3963c952e549c6fed61` - `chore: bump version to v1.0.3`
@@ -361,14 +361,133 @@ Added/updated:
 - `a944b148b89103516d0e09c6ad270c1ddfbe72a7` - `docs: add GitHub Pages deployment guide`
 - `1e48caaca9779fdafb67d6abbdb51a4e1d269c1d` - `docs: add deployment runbook`
 - `35d89f4b9a7c1e38ef49776d81eab2147eff83cb` - `docs: record v1.0.3 deployment changes`
+- `2ee66e0e8e2fafb3aebac7fef4f01e536ef78753` - final v1.0.3 branch head
 
-### Validation and next action
+### PR #4 and CI verification
 
-Next actions for v1.0.3:
+PR:
 
-1. Open a PR from `agent/v1.0.3` to `main`.
-2. Confirm the upgraded CI workflow passes install, alpha sync, syntax, unit tests, and build.
-3. Merge only after CI is green.
-4. Observe the `Deploy GitHub Pages` workflow on `main`.
-5. If deployment fails because Pages is not enabled, perform the documented one-time Settings -> Pages -> GitHub Actions selection and re-run the workflow.
-6. Once the production URL is live, run a real Gemini/Veo video regression test and record the evidence before adding more cleanup algorithms.
+- PR #4
+- Title: `feat: add GitHub Pages deployment v1.0.3`
+- Base: `main`
+- Head: `agent/v1.0.3`
+- Head SHA: `2ee66e0e8e2fafb3aebac7fef4f01e536ef78753`
+- 7 changed files
+- 393 additions / 10 deletions
+
+CI:
+
+- Workflow: `CI`
+- Run ID: `31772695918`
+- Run number: `49`
+- Job ID: `94681696549`
+- Result: SUCCESS
+
+Verified successful steps:
+
+1. `actions/checkout@v7` - PASS
+2. `actions/setup-node@v7` - PASS
+3. dependency install - PASS
+4. pinned alpha synchronization - PASS
+5. syntax checks - PASS
+6. unit tests - PASS, 5/5
+7. Vite production build - PASS
+
+### Merge of v1.0.3
+
+After CI #49 was green, PR #4 was marked ready and squash-merged.
+
+Merge result:
+
+- PR: #4
+- Merge method: squash
+- Merged: yes
+- Main commit: `0e0fd31fa048b84ce99e8f6a5fc062ed7316b26b`
+- Expected head SHA: `2ee66e0e8e2fafb3aebac7fef4f01e536ef78753`
+
+The merge immediately triggered both regular CI and the first `Deploy GitHub Pages` workflow on `main`.
+
+### First production deployment attempt
+
+Deployment workflow:
+
+- Name: `Deploy GitHub Pages`
+- Run ID: `31772735481`
+- Run number: `1`
+- Build job ID: `94681809508`
+- Commit: `0e0fd31fa048b84ce99e8f6a5fc062ed7316b26b`
+
+Successful build/validation steps:
+
+1. checkout - PASS
+2. Node.js 22 setup - PASS
+3. `npm install --no-audit --no-fund` - PASS
+4. `npm run setup:alpha` - PASS
+5. `npm run check` - PASS
+6. `npm test` - PASS, 5/5
+7. `npm run build` - PASS
+
+The production Vite build completed successfully. The log showed the generated `dist/` bundle, including the main JS/CSS and Web Worker asset.
+
+Deployment then failed at:
+
+- Step: `Configure GitHub Pages`
+- Action: `actions/configure-pages@v6`
+
+Observed error:
+
+```text
+Get Pages site failed. Please verify that the repository has Pages enabled and configured to build using GitHub Actions.
+```
+
+The next artifact-upload step was skipped, so no Pages deployment occurred.
+
+### Root cause and enablement research
+
+The build itself is not the problem. GitHub Pages is not yet enabled/configured for the repository.
+
+The current `actions/configure-pages` action definition was inspected. Its `enablement` option can try to enable Pages, but automatic enablement explicitly requires a token other than the default `GITHUB_TOKEN`.
+
+Required permissions depend on token type:
+
+- Personal Access Token: repository/Pages write capability as documented by the action.
+- GitHub App token: `administration:write` and `pages:write`.
+
+The project will not introduce an additional privileged PAT solely to automate a one-time repository setting. The safer next action is the GitHub UI setting already documented in `DEPLOYMENT.md`.
+
+## 2026-08-14 - v1.0.4 deployment-state logging
+
+Branch:
+
+- `agent/v1.0.4`
+- Based on `main` at v1.0.3 merge commit `0e0fd31fa048b84ce99e8f6a5fc062ed7316b26b`.
+
+Purpose:
+
+- Record the completed v1.0.3 CI/merge/deployment attempt without losing the exact run IDs and root cause.
+- Keep the repository versioning rule: every repository edit increments the version.
+- Avoid merging another release to `main` while Pages remains disabled, because that would only trigger another known-failing deployment run.
+
+Changes:
+
+- Bumped package version to `1.0.4`.
+- Updated README with the current deployment state and exact remaining UI step.
+- Updated `CHANGELOG.md` with the v1.0.3 CI, merge, and deployment result.
+- Updated `DEPLOYMENT.md` with run IDs, successful build evidence, exact Pages error, and the reason automatic enablement is not used.
+- Updated this project log with the complete v1.0.3 result.
+
+### Current blocker
+
+One-time GitHub repository action required:
+
+**Settings -> Pages -> Build and deployment -> Source: GitHub Actions**
+
+Because the repository is private, GitHub must also show Pages as available for the account plan. If the UI instead requires a plan upgrade, do not make the repository public automatically; decide explicitly whether to upgrade, expose the source, or use another host.
+
+### Next action
+
+1. Keep v1.0.4 as an unmerged draft branch/PR.
+2. Enable GitHub Pages in repository Settings if the account plan permits it.
+3. Re-run the existing `Deploy GitHub Pages` workflow from `main` and confirm configure/upload/deploy all pass.
+4. Once the site is live, merge the v1.0.4 documentation state only after CI is green.
+5. Run a real Gemini/Veo video regression test in the deployed browser app and record the result before changing cleanup algorithms.
