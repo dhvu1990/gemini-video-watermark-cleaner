@@ -223,14 +223,152 @@ Changes:
 - Updated README version banner to `v1.0.2`.
 - Updated this log with the completed CI and merge details.
 
-Branch commits so far:
+Branch commits:
 
 - `584618a05581fa4cf7e0772e1bd9a6f3eb661649` - `chore: bump version to v1.0.2`
 - `457acfd241c4aab812963a8e6ecf5a23bfa10090` - `docs: record v1.0.2 release state`
 - `0adc48f28f909f0d45fec5690671b633ecf3014d` - `docs: bump README to v1.0.2`
+- `9ef4107248388c27c26f7b5a6dbadae9e8274b19` - final v1.0.2 branch head
 
-### Current state and next action
+PR:
 
-- `main`: working v1.0.1 implementation, CI green, full build validated.
-- `agent/v1.0.2`: documentation/version follow-up that records the successful release state.
-- Next action: validate v1.0.2 CI, merge it into `main`, then move to browser deployment/real-video regression testing and only promote additional cleanup backends or watermark variants after representative tests exist.
+- PR #3
+- Title: `docs: record validated release state v1.0.2`
+- Base: `main`
+- Head: `agent/v1.0.2`
+- 4 changed files
+- 88 additions / 8 deletions
+
+### Successful CI verification for PR #3
+
+Workflow:
+
+- Name: `CI`
+- Run ID: `31770415114`
+- Run number: `39`
+- Job: `test-build`
+- Job ID: `94674983049`
+- Result: SUCCESS
+
+Verified successful steps:
+
+1. checkout - PASS
+2. setup Node.js 22 - PASS
+3. dependency install - PASS
+4. pinned alpha synchronization - PASS
+5. syntax checks - PASS
+6. unit tests - PASS
+7. Vite production build - PASS
+
+### Merge of v1.0.2
+
+PR #3 was marked ready for review and squash-merged after the successful CI result.
+
+Merge result:
+
+- PR: #3
+- Merge method: squash
+- Merged: yes
+- Main commit: `d4a3ec8dca85156359c1f6e2455b7b02a1acacbf`
+- Expected head SHA: `9ef4107248388c27c26f7b5a6dbadae9e8274b19`
+
+v1.0.2 therefore became the stable `main` state before browser deployment work began.
+
+## 2026-08-14 - v1.0.3 GitHub Pages deployment preparation
+
+Branch:
+
+- `agent/v1.0.3`
+- Based on `main` at v1.0.2 merge commit `d4a3ec8dca85156359c1f6e2455b7b02a1acacbf`.
+
+### Goal
+
+Create a repeatable production web deployment path so the cleaner can be opened directly in a browser without manually running Vite locally, while keeping video processing local to the browser.
+
+### GitHub Pages research and constraints
+
+GitHub's current documentation confirms:
+
+- GitHub Pages supports custom GitHub Actions workflows.
+- The deployment job requires `pages: write` and `id-token: write` permissions.
+- The standard artifact workflow uses `configure-pages`, `upload-pages-artifact`, and `deploy-pages`.
+- GitHub Pages is available for private repositories only on account plans that support Pages for private repositories.
+- A private repository does not automatically make its Pages site private. Pages sites are publicly available by default unless eligible organization/enterprise access control is explicitly configured.
+- Privately published Pages access control requires an eligible GitHub Enterprise Cloud organization.
+
+The GitHub connector's direct REST request for this repository's `/pages` configuration returned `403 Resource not accessible by integration`. Therefore repository Pages enablement cannot be changed through the connected integration in this environment. The workflow can still be committed; if Pages is not enabled, the remaining one-time UI step is documented in `DEPLOYMENT.md`.
+
+### Action version verification
+
+Before writing the deployment workflow, current GitHub releases were checked:
+
+- `actions/checkout`: v7 series (`v7.0.1` latest observed)
+- `actions/setup-node`: v7 (`v7.0.0` latest observed)
+- `actions/configure-pages`: v6 (`v6.0.0` latest observed)
+- `actions/upload-pages-artifact`: v5 (`v5.0.0` latest observed)
+- `actions/deploy-pages`: v5 (`v5.0.0` latest observed)
+
+The v1.0.3 workflows use these current major versions instead of the earlier v4 setup where appropriate.
+
+### Deployment implementation
+
+Added `.github/workflows/deploy-pages.yml` with:
+
+- trigger on pushes to `main`,
+- manual `workflow_dispatch`,
+- Node.js 22,
+- dependency installation,
+- pinned alpha sync,
+- syntax checks,
+- unit tests,
+- production Vite build,
+- Pages artifact upload from `dist/`,
+- `github-pages` environment deployment.
+
+The workflow permissions are:
+
+```yaml
+contents: read
+pages: write
+id-token: write
+```
+
+The existing `vite.config.js` remains at `base: './'`. No source change is required because relative asset paths are suitable for the project-site path `/gemini-video-watermark-cleaner/` and avoid coupling the application to one hard-coded deployment root.
+
+### CI modernization
+
+Updated `.github/workflows/ci.yml`:
+
+- `actions/checkout@v4` -> `actions/checkout@v7`
+- `actions/setup-node@v4` -> `actions/setup-node@v7`
+
+Node.js remains pinned to version 22 for the project test/build runtime.
+
+### Documentation
+
+Added/updated:
+
+- `DEPLOYMENT.md`: production Pages runbook, one-time UI enablement, privacy warning, smoke test, regression evidence checklist, troubleshooting.
+- `README.md`: v1.0.3 banner and deployment overview.
+- `CHANGELOG.md`: v1.0.3 release notes.
+- `PROJECT_LOG.md`: this complete deployment/release history.
+
+### v1.0.3 branch commits created so far
+
+- `061fc94877b199f9e00a7cbb7be5dc095bb84e9b` - `feat: add GitHub Pages deployment workflow`
+- `73d57b51c7d33537328ef3963c952e549c6fed61` - `chore: bump version to v1.0.3`
+- `9219f9d4d07e7bd0a091a11865467f6daadcb953` - `ci: update core GitHub Actions to v7`
+- `a944b148b89103516d0e09c6ad270c1ddfbe72a7` - `docs: add GitHub Pages deployment guide`
+- `1e48caaca9779fdafb67d6abbdb51a4e1d269c1d` - `docs: add deployment runbook`
+- `35d89f4b9a7c1e38ef49776d81eab2147eff83cb` - `docs: record v1.0.3 deployment changes`
+
+### Validation and next action
+
+Next actions for v1.0.3:
+
+1. Open a PR from `agent/v1.0.3` to `main`.
+2. Confirm the upgraded CI workflow passes install, alpha sync, syntax, unit tests, and build.
+3. Merge only after CI is green.
+4. Observe the `Deploy GitHub Pages` workflow on `main`.
+5. If deployment fails because Pages is not enabled, perform the documented one-time Settings -> Pages -> GitHub Actions selection and re-run the workflow.
+6. Once the production URL is live, run a real Gemini/Veo video regression test and record the evidence before adding more cleanup algorithms.
