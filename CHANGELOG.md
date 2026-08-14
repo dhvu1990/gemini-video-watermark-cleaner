@@ -1,5 +1,28 @@
 # Changelog
 
+## 1.0.17 - 2026-08-14
+
+- Added two-stage **subpixel alpha registration** after coarse calibration.
+- Tightened shape-scale search to `0.985 / 1.000 / 1.015` now that real-video validation shows the remaining artifact is primarily a thin edge mismatch rather than a large footprint error.
+- Added bounded fractional alpha offsets `-0.4 / 0 / +0.4 px` independently in X and Y, evaluated only around the coarse winner to keep browser analysis practical.
+- Added bilinear alpha-map registration without moving the source video or integer detector box.
+- Split calibration diagnostics into `nearZero`, `edge`, `lowBody`, and `highBody` residual buckets; the combined objective weights the edge bucket most strongly while still penalizing core/outside damage.
+- Added Tune-panel diagnostics for selected Offset X/Y plus Edge / Low-body / High-body residual values.
+- Preserved the v1.0.16 hybrid detail core, padded repair, multi-frame atlas, normal-direction edge bridge and temporal stabilization pipeline.
+- Added regression tests for fractional alpha movement and residual-bucket isolation.
+- Updated UI/package/export metadata to v1.0.17.
+- Detailed journal: `logs/2026-08-14-v1.0.17-subpixel-alpha-registration.md`.
+
+## 1.0.16 - 2026-08-14
+
+- Added **normal-direction edge bridge** repair after real-video validation showed v1.0.15 preserved the core well but still left a thin Gemini diamond outline.
+- Edge-ring pixels use the alpha-gradient normal to find an outer clean-background anchor and an inner restored/core anchor, then interpolate across the residual edge rather than blurring the whole ROI.
+- Added structure guards when inner/outer anchors disagree strongly so real scene edges are not flattened.
+- Kept high-alpha core pixels protected by the v1.0.15 hybrid mask.
+- Shared the edge-bridge path between detection preview and full-video export.
+- Added diagnostics in export metadata and regression tests for halo reduction, core preservation and strong-structure protection.
+- Detailed journal: `logs/2026-08-14-v1.0.16-normal-edge-bridge.md`.
+
 ## 1.0.15 - 2026-08-14
 
 - Changed cleanup from whole-footprint reconstruction to a hybrid core/ring strategy after real-video validation showed v1.0.14 blurred high-frequency texture inside the watermark more than v1.0.12.

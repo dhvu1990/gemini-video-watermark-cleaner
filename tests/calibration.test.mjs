@@ -4,8 +4,10 @@ import {
   applyEdgeGain,
   backgroundContinuityScore,
   bodyGainCandidates,
+  residualBucketScores,
   residualEdgeScore,
-  scaleAlphaShape
+  scaleAlphaShape,
+  transformAlphaRegistration
 } from '../src/video/calibration.js';
 import { inverseAlphaRestore } from '../src/video/restore.js';
 
@@ -41,12 +43,33 @@ function compositeWhite(background, alpha, gain = 1) {
   return out;
 }
 
+function centerOfMassX(alpha, size) {
+  let weighted = 0;
+  let sum = 0;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const a = alpha[y * size + x] || 0;
+      weighted += x * a;
+      sum += a;
+    }
+  }
+  return sum ? weighted / sum : 0;
+}
+
 test('shape scale expands alpha footprint without changing dimensions', () => {
   const size = 24;
   const alpha = diamondAlpha(size);
   const expanded = scaleAlphaShape(alpha, size, 1.03);
   assert.equal(expanded.length, alpha.length);
   assert.ok(expanded.reduce((a, b) => a + b, 0) > alpha.reduce((a, b) => a + b, 0));
+});
+
+test('subpixel registration shifts alpha footprint without changing dimensions', () => {
+  const size = 32;
+  const alpha = diamondAlpha(size);
+  const shifted = transformAlphaRegistration(alpha, size, { offsetX: 0.4, offsetY: -0.4 });
+  assert.equal(shifted.length, alpha.length);
+  assert.ok(centerOfMassX(shifted, size) > centerOfMassX(alpha, size));
 });
 
 test('edge gain strengthens edge-weighted alpha while preserving center bounds', () => {
@@ -71,6 +94,26 @@ test('residual score penalizes a strong artificial edge', () => {
     }
   }
   assert.ok(residualEdgeScore(original, edged, alpha) > residualEdgeScore(original, clean, alpha));
+});
+
+test('residual buckets isolate edge damage from body damage', () => {
+  const size = 32;
+  const alpha = diamondAlpha(size);
+  const original = image(size, 90);
+  const cleaned = image(size, 90);
+  for (let y = 1; y < size - 1; y++) {
+    for (let x = 1; x < size - 1; x++) {
+      const p = y * size + x;
+      const a = alpha[p] || 0;
+      if (a > 0.03 && a < 0.16) {
+        const i = p * 4;
+        cleaned.data[i] = cleaned.data[i + 1] = cleaned.data[i + 2] = 145;
+      }
+    }
+  }
+  const buckets = residualBucketScores(original, cleaned, alpha);
+  assert.ok(Number.isFinite(buckets.total));
+  assert.ok(buckets.edge > buckets.highBody);
 });
 
 test('body gain candidates search below an overestimated detector gain', () => {

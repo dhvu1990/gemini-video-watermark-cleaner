@@ -186,12 +186,16 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     calibration: calibration ? {
       profile: calibration.profile,
       shapeScale: calibration.shapeScale,
+      offsetX: calibration.offsetX,
+      offsetY: calibration.offsetY,
       edgeBoost: calibration.edgeBoost,
       edgeGain: calibration.edgeGain,
       bodyGain: calibration.bodyGain,
       initialBodyGain: calibration.initialBodyGain,
       residualScore: calibration.residualScore,
+      residualBuckets: calibration.residualBuckets,
       baselineScore: calibration.baselineScore,
+      baselineBuckets: calibration.baselineBuckets,
       improvement: calibration.improvement
     } : null,
     alphaMap: best.alphaMap,

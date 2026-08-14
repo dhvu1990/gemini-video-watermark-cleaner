@@ -2,35 +2,55 @@ import { getVideoAlphaMap } from './alpha.js';
 import { applyEdgePolish, inverseAlphaRestore } from './restore.js';
 
 const PROFILES = ['96-20260520', '96'];
-const SHAPE_SCALES = [0.98, 1.0, 1.03];
+const SHAPE_SCALES = [0.985, 1.0, 1.015];
 const EDGE_BOOSTS = [0.03, 0.055, 0.085];
 const EDGE_GAINS = [1.0, 1.15, 1.3];
 const BODY_GAIN_FACTORS = [0.78, 0.88, 0.98, 1.08];
+const SUBPIXEL_OFFSETS = [-0.4, 0, 0.4];
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function luma(data, idx) { return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]; }
 
-export function scaleAlphaShape(alphaMap, size, scale = 1) {
-  const safeScale = clamp(Number(scale) || 1, 0.94, 1.08);
-  if (Math.abs(safeScale - 1) < 1e-6) return new Float32Array(alphaMap);
-  const out = new Float32Array(alphaMap.length);
+function sampleAlpha(alphaMap, size, x, y) {
+  if (x < 0 || y < 0 || x > size - 1 || y > size - 1) return 0;
+  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x1 = Math.min(size - 1, x0 + 1), y1 = Math.min(size - 1, y0 + 1);
+  const fx = x - x0, fy = y - y0;
+  const a00 = alphaMap[y0 * size + x0] || 0;
+  const a10 = alphaMap[y0 * size + x1] || 0;
+  const a01 = alphaMap[y1 * size + x0] || 0;
+  const a11 = alphaMap[y1 * size + x1] || 0;
+  return a00 * (1 - fx) * (1 - fy)
+    + a10 * fx * (1 - fy)
+    + a01 * (1 - fx) * fy
+    + a11 * fx * fy;
+}
+
+export function transformAlphaRegistration(alphaMap, size, {
+  scale = 1,
+  offsetX = 0,
+  offsetY = 0
+} = {}) {
+  const safeScale = clamp(Number(scale) || 1, 0.96, 1.04);
+  const safeX = clamp(Number(offsetX) || 0, -0.75, 0.75);
+  const safeY = clamp(Number(offsetY) || 0, -0.75, 0.75);
+  if (Math.abs(safeScale - 1) < 1e-8 && Math.abs(safeX) < 1e-8 && Math.abs(safeY) < 1e-8) {
+    return new Float32Array(alphaMap);
+  }
+  const out = new Float32Array(size * size);
   const center = (size - 1) / 2;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      const sx = center + (x - center) / safeScale;
-      const sy = center + (y - center) / safeScale;
-      const x0 = Math.floor(sx), y0 = Math.floor(sy);
-      const x1 = x0 + 1, y1 = y0 + 1;
-      if (x0 < 0 || y0 < 0 || x1 >= size || y1 >= size) continue;
-      const fx = sx - x0, fy = sy - y0;
-      const a00 = alphaMap[y0 * size + x0] || 0;
-      const a10 = alphaMap[y0 * size + x1] || 0;
-      const a01 = alphaMap[y1 * size + x0] || 0;
-      const a11 = alphaMap[y1 * size + x1] || 0;
-      out[y * size + x] = a00 * (1 - fx) * (1 - fy) + a10 * fx * (1 - fy) + a01 * (1 - fx) * fy + a11 * fx * fy;
+      const sx = center + (x - center - safeX) / safeScale;
+      const sy = center + (y - center - safeY) / safeScale;
+      out[y * size + x] = sampleAlpha(alphaMap, size, sx, sy);
     }
   }
   return out;
+}
+
+export function scaleAlphaShape(alphaMap, size, scale = 1) {
+  return transformAlphaRegistration(alphaMap, size, { scale });
 }
 
 export function applyEdgeGain(alphaMap, size, edgeGain = 1) {
@@ -57,6 +77,30 @@ export function applyEdgeGain(alphaMap, size, edgeGain = 1) {
     out[p] = clamp(a * (1 + (gain - 1) * weight), 0, 0.95);
   }
   return out;
+}
+
+function buildAlphaGradient(alphaMap, width, height) {
+  const gradient = new Float32Array(alphaMap.length);
+  let maxGradient = 0;
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      const gx = (alphaMap[p + 1] || 0) - (alphaMap[p - 1] || 0);
+      const gy = (alphaMap[p + width] || 0) - (alphaMap[p - width] || 0);
+      const value = Math.hypot(gx, gy);
+      gradient[p] = value;
+      maxGradient = Math.max(maxGradient, value);
+    }
+  }
+  if (maxGradient > 0) for (let p = 0; p < gradient.length; p++) gradient[p] /= maxGradient;
+  return gradient;
+}
+
+function residualBucket(alpha, gradient) {
+  if (alpha <= 0.035) return 'nearZero';
+  if (gradient >= 0.18) return 'edge';
+  if (alpha >= 0.22) return 'highBody';
+  return 'lowBody';
 }
 
 function safeAnchor(original, alphaMap, x, y, dx, dy) {
@@ -175,8 +219,55 @@ export function residualEdgeScore(original, cleaned, alphaMap) {
   return edgeResidual + outsideDamage * 1.8;
 }
 
+export function residualBucketScores(original, cleaned, alphaMap) {
+  const { width, height } = original;
+  const gradient = buildAlphaGradient(alphaMap, width, height);
+  const sums = { nearZero: 0, edge: 0, lowBody: 0, highBody: 0 };
+  const counts = { nearZero: 0, edge: 0, lowBody: 0, highBody: 0 };
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      const alpha = alphaMap[p] || 0;
+      const bucket = residualBucket(alpha, gradient[p] || 0);
+      const idx = p * 4;
+      let error = 0;
+      if (bucket === 'nearZero') {
+        error = (
+          Math.abs(cleaned.data[idx] - original.data[idx]) +
+          Math.abs(cleaned.data[idx + 1] - original.data[idx + 1]) +
+          Math.abs(cleaned.data[idx + 2] - original.data[idx + 2])
+        ) / 3;
+      } else {
+        const predicted = predictedBackground(original, alphaMap, x, y);
+        if (!predicted) continue;
+        error = (
+          Math.abs(cleaned.data[idx] - predicted[0]) +
+          Math.abs(cleaned.data[idx + 1] - predicted[1]) +
+          Math.abs(cleaned.data[idx + 2] - predicted[2])
+        ) / 3;
+        if (bucket === 'edge') {
+          const cleanGrad = Math.hypot(
+            luma(cleaned.data, (p + 1) * 4) - luma(cleaned.data, (p - 1) * 4),
+            luma(cleaned.data, (p + width) * 4) - luma(cleaned.data, (p - width) * 4)
+          );
+          error += cleanGrad * 0.18;
+        }
+      }
+      sums[bucket] += error;
+      counts[bucket]++;
+    }
+  }
+
+  const scores = Object.fromEntries(Object.keys(sums).map((key) => [key, counts[key] ? sums[key] / counts[key] : 0]));
+  scores.total = scores.edge * 0.46 + scores.lowBody * 0.22 + scores.highBody * 0.18 + scores.nearZero * 0.14;
+  return scores;
+}
+
 function candidateScore(original, cleaned, alphaMap) {
-  return backgroundContinuityScore(original, cleaned, alphaMap) * 0.82 + residualEdgeScore(original, cleaned, alphaMap) * 0.18;
+  const buckets = residualBucketScores(original, cleaned, alphaMap);
+  const continuity = backgroundContinuityScore(original, cleaned, alphaMap);
+  return { total: buckets.total * 0.72 + continuity * 0.28, buckets };
 }
 
 export function bodyGainCandidates(estimate = 1) {
@@ -190,19 +281,26 @@ export async function buildCalibratedAlphaMap(size, calibration = {}) {
   const shapeScale = Number.isFinite(calibration.shapeScale) ? calibration.shapeScale : 1;
   const edgeBoost = Number.isFinite(calibration.edgeBoost) ? calibration.edgeBoost : 0.055;
   const edgeGain = Number.isFinite(calibration.edgeGain) ? calibration.edgeGain : 1;
+  const offsetX = Number.isFinite(calibration.offsetX) ? calibration.offsetX : 0;
+  const offsetY = Number.isFinite(calibration.offsetY) ? calibration.offsetY : 0;
   const base = await getVideoAlphaMap(size, profile, edgeBoost);
-  const shaped = scaleAlphaShape(base, size, shapeScale);
+  const shaped = transformAlphaRegistration(base, size, { scale: shapeScale, offsetX, offsetY });
   return applyEdgeGain(shaped, size, edgeGain);
 }
 
 function scoreSamples(samples, alphaMap, bodyGain, edgePolish, polish = true) {
-  let score = 0;
+  let total = 0;
+  const bucketTotals = { nearZero: 0, edge: 0, lowBody: 0, highBody: 0, total: 0 };
   for (const roi of samples) {
     let cleaned = inverseAlphaRestore(roi, alphaMap, bodyGain);
     if (polish) cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
-    score += candidateScore(roi, cleaned, alphaMap);
+    const score = candidateScore(roi, cleaned, alphaMap);
+    total += score.total;
+    for (const key of Object.keys(bucketTotals)) bucketTotals[key] += score.buckets[key] || 0;
   }
-  return score / samples.length;
+  const count = Math.max(1, samples.length);
+  for (const key of Object.keys(bucketTotals)) bucketTotals[key] /= count;
+  return { total: total / count, buckets: bucketTotals };
 }
 
 export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish = 0.35, onProgress }) {
@@ -211,14 +309,14 @@ export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish
 
   const initialBodyGain = clamp(Number(bodyGain) || 1, 0.55, 1.35);
   const baselineMap = await buildCalibratedAlphaMap(size, {
-    profile: '96-20260520', shapeScale: 1, edgeBoost: 0.03, edgeGain: 1
+    profile: '96-20260520', shapeScale: 1, edgeBoost: 0.03, edgeGain: 1, offsetX: 0, offsetY: 0
   });
-  const baselineScore = scoreSamples(samples, baselineMap, initialBodyGain, edgePolish, true);
+  const baseline = scoreSamples(samples, baselineMap, initialBodyGain, edgePolish, true);
 
   let selectedBodyGain = initialBodyGain;
   let selectedBodyScore = Number.POSITIVE_INFINITY;
   for (const gain of bodyGainCandidates(initialBodyGain)) {
-    const score = scoreSamples(samples, baselineMap, gain, 0, false);
+    const score = scoreSamples(samples, baselineMap, gain, 0, false).total;
     if (score < selectedBodyScore) {
       selectedBodyScore = score;
       selectedBodyGain = gain;
@@ -230,32 +328,58 @@ export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish
     shapeScale: 1,
     edgeBoost: 0.03,
     edgeGain: 1,
+    offsetX: 0,
+    offsetY: 0,
     bodyGain: selectedBodyGain,
-    residualScore: scoreSamples(samples, baselineMap, selectedBodyGain, edgePolish, true),
+    residualScore: Number.POSITIVE_INFINITY,
+    residualBuckets: null,
     alphaMap: baselineMap
   };
 
   let index = 0;
-  const total = PROFILES.length * SHAPE_SCALES.length * EDGE_BOOSTS.length * EDGE_GAINS.length;
+  const coarseTotal = PROFILES.length * SHAPE_SCALES.length * EDGE_BOOSTS.length * EDGE_GAINS.length;
+  const total = coarseTotal + SUBPIXEL_OFFSETS.length * SUBPIXEL_OFFSETS.length;
   for (const profile of PROFILES) {
     for (const shapeScale of SHAPE_SCALES) {
       for (const edgeBoost of EDGE_BOOSTS) {
         for (const edgeGain of EDGE_GAINS) {
           index++;
-          const alphaMap = await buildCalibratedAlphaMap(size, { profile, shapeScale, edgeBoost, edgeGain });
+          const alphaMap = await buildCalibratedAlphaMap(size, { profile, shapeScale, edgeBoost, edgeGain, offsetX: 0, offsetY: 0 });
           const score = scoreSamples(samples, alphaMap, selectedBodyGain, edgePolish, true);
-          if (score < best.residualScore) {
-            best = { profile, shapeScale, edgeBoost, edgeGain, bodyGain: selectedBodyGain, residualScore: score, alphaMap };
+          if (score.total < best.residualScore) {
+            best = { profile, shapeScale, edgeBoost, edgeGain, offsetX: 0, offsetY: 0, bodyGain: selectedBodyGain, residualScore: score.total, residualBuckets: score.buckets, alphaMap };
           }
-          if (index % 6 === 0) onProgress?.({ index, total, progress: index / total });
+          if (index % 6 === 0) onProgress?.({ index, total, progress: index / total, phase: 'coarse-alpha-fit' });
         }
       }
     }
   }
 
+  const coarseBest = { ...best };
+  for (const offsetY of SUBPIXEL_OFFSETS) {
+    for (const offsetX of SUBPIXEL_OFFSETS) {
+      index++;
+      const alphaMap = await buildCalibratedAlphaMap(size, {
+        profile: coarseBest.profile,
+        shapeScale: coarseBest.shapeScale,
+        edgeBoost: coarseBest.edgeBoost,
+        edgeGain: coarseBest.edgeGain,
+        offsetX,
+        offsetY
+      });
+      const score = scoreSamples(samples, alphaMap, selectedBodyGain, edgePolish, true);
+      const offsetPenalty = (Math.abs(offsetX) + Math.abs(offsetY)) * 0.025;
+      if (score.total + offsetPenalty < best.residualScore) {
+        best = { ...coarseBest, offsetX, offsetY, residualScore: score.total, residualBuckets: score.buckets, alphaMap };
+      }
+      onProgress?.({ index, total, progress: index / total, phase: 'subpixel-alpha-fit' });
+    }
+  }
+
   best.initialBodyGain = initialBodyGain;
-  best.baselineScore = baselineScore;
+  best.baselineScore = baseline.total;
+  best.baselineBuckets = baseline.buckets;
   best.bodyOnlyScore = selectedBodyScore;
-  best.improvement = baselineScore > 0 ? clamp((baselineScore - best.residualScore) / baselineScore, -1, 1) : 0;
+  best.improvement = baseline.total > 0 ? clamp((baseline.total - best.residualScore) / baseline.total, -1, 1) : 0;
   return best;
 }
