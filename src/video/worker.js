@@ -17,7 +17,15 @@ self.onmessage = async (event) => {
 
   try {
     if (message.type === 'inspect') {
-      const result = await inspectVideo(message.file, { ...message.options, onProgress: progress, shouldCancel });
+      const quickScan = String(tag || '').startsWith('quick:');
+      const result = await inspectVideo(message.file, {
+        ...message.options,
+        scanFraction: Number.isFinite(message.options?.scanFraction)
+          ? message.options.scanFraction
+          : (quickScan ? 0.25 : 1),
+        onProgress: progress,
+        shouldCancel
+      });
       if (cancelled) return self.postMessage({ type: 'cancelled', tag });
       const { internalDetection, ...publicResult } = result;
       self.postMessage({ type: 'inspect-result', tag, result: publicResult });
