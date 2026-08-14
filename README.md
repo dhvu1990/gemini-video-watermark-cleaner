@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.3** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.4** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -68,7 +68,7 @@ The resulting `dist/` folder is static and can be hosted on GitHub Pages, Cloudf
 
 ## GitHub Pages deployment
 
-v1.0.3 adds `.github/workflows/deploy-pages.yml`.
+v1.0.3 added `.github/workflows/deploy-pages.yml`. The production build path has been validated end-to-end up to the GitHub Pages configuration step.
 
 On every push to `main`, the workflow:
 
@@ -84,13 +84,23 @@ On every push to `main`, the workflow:
 
 The current Vite setting uses `base: './'`, so generated JS/CSS/worker asset URLs remain relative and work under the repository project path without hard-coding the repository name.
 
-If GitHub Pages is enabled for the repository, the expected project URL is:
+### Current deployment status
+
+The v1.0.3 deployment run successfully completed dependency install, alpha-profile sync, syntax checks, all 5 unit tests, and the Vite production build. It then stopped at `Configure GitHub Pages` because Pages is not yet enabled/configured for this repository.
+
+The remaining one-time repository step is:
+
+**Repository Settings -> Pages -> Build and deployment -> Source: GitHub Actions**
+
+After that, re-run the `Deploy GitHub Pages` workflow. The workflow intentionally does not try to auto-enable Pages because the `configure-pages` action requires a token other than the default `GITHUB_TOKEN` for automatic enablement.
+
+If GitHub Pages is enabled for the repository, the expected public project URL is:
 
 ```text
 https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 ```
 
-This repository is currently private. GitHub Pages for a private personal repository requires a plan that supports Pages for private repositories. If Pages has not yet been enabled, open **Repository Settings -> Pages -> Build and deployment** and select **GitHub Actions** as the source. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the exact checklist and troubleshooting notes.
+This repository is currently private. GitHub Pages for a private personal repository requires a plan that supports Pages for private repositories. A private repository does not automatically make a Pages site private. See [`DEPLOYMENT.md`](./DEPLOYMENT.md) for the exact checklist and privacy notes.
 
 ## Default processing pipeline
 
