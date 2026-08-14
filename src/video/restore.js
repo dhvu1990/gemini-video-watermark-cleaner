@@ -1,3 +1,5 @@
+import { enhanceAlphaEdges } from './alpha.js';
+
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function luma(data, idx) { return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]; }
@@ -41,43 +43,6 @@ function alphaEdgeMap(alphaMap, width, height) {
   return out;
 }
 
-export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
-  const safeStrength = clamp(Number(strength) || 0, 0, 1);
-  if (safeStrength <= 0) return imageData;
-  const { width, height, data } = imageData;
-  const edge = alphaEdgeMap(alphaMap, width, height);
-  const out = new Uint8ClampedArray(data);
-  for (let y = 1; y < height - 1; y++) {
-    for (let x = 1; x < width - 1; x++) {
-      const p = y * width + x;
-      const mask = edge[p] * safeStrength;
-      if (mask < 0.05 || (alphaMap[p] || 0) < 0.01) continue;
-      const idx = p * 4;
-      const centerLuma = luma(data, idx);
-      const sums = [0, 0, 0];
-      let weightSum = 0;
-      for (let dy = -1; dy <= 1; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          const np = (y + dy) * width + x + dx;
-          const ni = np * 4;
-          const delta = Math.abs(luma(data, ni) - centerLuma);
-          const colorWeight = Math.exp(-(delta * delta) / (2 * 28 * 28));
-          const spatial = dx === 0 && dy === 0 ? 1.5 : (dx === 0 || dy === 0 ? 1 : 0.7);
-          const w = colorWeight * spatial;
-          sums[0] += data[ni] * w;
-          sums[1] += data[ni + 1] * w;
-          sums[2] += data[ni + 2] * w;
-          weightSum += w;
-        }
-      }
-      if (weightSum <= 0) continue;
-      const blend = Math.min(0.34, mask * 0.28);
-      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
-    }
-  }
-  return { width, height, data: out };
-}
-
 export function applyResidualFootprintCleanup(imageData, alphaMap, strength = 0.65) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0) return imageData;
@@ -90,14 +55,22 @@ export function applyResidualFootprintCleanup(imageData, alphaMap, strength = 0.
       const p = y * width + x;
       const a = alphaMap[p] || 0;
       let localMax = a;
-      for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) localMax = Math.max(localMax, alphaMap[(y + dy) * width + x + dx] || 0);
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          localMax = Math.max(localMax, alphaMap[(y + dy) * width + x + dx] || 0);
+        }
+      }
       if (localMax < 0.012) continue;
 
       const idx = p * 4;
-      const gx = luma(data, ((y) * width + x + 1) * 4) - luma(data, ((y) * width + x - 1) * 4);
+      const gx = luma(data, (y * width + x + 1) * 4) - luma(data, (y * width + x - 1) * 4);
       const gy = luma(data, ((y + 1) * width + x) * 4) - luma(data, ((y - 1) * width + x) * 4);
       const structureGuard = smoothstep(24, 92, Math.hypot(gx, gy));
-      const edgeBand = clamp(edge[p] * 0.65 + smoothstep(0.012, 0.12, localMax) * (1 - smoothstep(0.10, 0.34, a)) * 0.7, 0, 1);
+      const edgeBand = clamp(
+        edge[p] * 0.65 + smoothstep(0.012, 0.12, localMax) * (1 - smoothstep(0.10, 0.34, a)) * 0.7,
+        0,
+        1
+      );
       const mask = edgeBand * safeStrength * (1 - structureGuard * 0.72);
       if (mask < 0.05) continue;
 
@@ -121,10 +94,55 @@ export function applyResidualFootprintCleanup(imageData, alphaMap, strength = 0.
       }
       if (weightSum <= 0) continue;
       const blend = Math.min(0.58, mask * 0.58);
-      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
+      for (let c = 0; c < 3; c++) {
+        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
+      }
     }
   }
   return { width, height, data: out };
+}
+
+export function applyEdgePolish(imageData, alphaMap, strength = 0.35) {
+  const safeStrength = clamp(Number(strength) || 0, 0, 1);
+  if (safeStrength <= 0) return imageData;
+  const { width, height, data } = imageData;
+  const cleanupAlpha = width >= 40 && width === height ? enhanceAlphaEdges(alphaMap, width, 0.045) : new Float32Array(alphaMap);
+  const edge = alphaEdgeMap(cleanupAlpha, width, height);
+  const out = new Uint8ClampedArray(data);
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      const mask = edge[p] * safeStrength;
+      if (mask < 0.05 || (cleanupAlpha[p] || 0) < 0.01) continue;
+      const idx = p * 4;
+      const centerLuma = luma(data, idx);
+      const sums = [0, 0, 0];
+      let weightSum = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const np = (y + dy) * width + x + dx;
+          const ni = np * 4;
+          const delta = Math.abs(luma(data, ni) - centerLuma);
+          const colorWeight = Math.exp(-(delta * delta) / (2 * 28 * 28));
+          const spatial = dx === 0 && dy === 0 ? 1.5 : (dx === 0 || dy === 0 ? 1 : 0.7);
+          const w = colorWeight * spatial;
+          sums[0] += data[ni] * w;
+          sums[1] += data[ni + 1] * w;
+          sums[2] += data[ni + 2] * w;
+          weightSum += w;
+        }
+      }
+      if (weightSum <= 0) continue;
+      const blend = Math.min(0.34, mask * 0.28);
+      for (let c = 0; c < 3; c++) {
+        out[idx + c] = clampByte(data[idx + c] * (1 - blend) + sums[c] / weightSum * blend);
+      }
+    }
+  }
+
+  const polished = { width, height, data: out };
+  return applyResidualFootprintCleanup(polished, cleanupAlpha, Math.min(0.85, 0.45 + safeStrength * 0.55));
 }
 
 export function stabilizeCorrection(original, processed, previous, alphaMap, strength = 0.7) {
