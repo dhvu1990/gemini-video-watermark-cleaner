@@ -97,6 +97,77 @@ function bridgePrediction(outer, inner) {
   return [0, 1, 2].map((c) => outer.rgb[c] * outerWeight + inner.rgb[c] * innerWeight);
 }
 
+export function applyMicroEdgeFinish(image, alphaMap, strength = 0.48) {
+  const safeStrength = clamp(Number(strength) || 0, 0, 1);
+  if (safeStrength <= 0 || alphaMap.length !== image.width * image.height) return image;
+
+  const { width, height, data } = image;
+  const masks = buildHybridRepairMask(alphaMap, width, height);
+  const out = new Uint8ClampedArray(data);
+  let finishingPixels = 0;
+  let blendSum = 0;
+
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const p = y * width + x;
+      const alpha = alphaMap[p] || 0;
+      const edge = masks.edge[p] || 0;
+      const feather = masks.feather[p] || 0;
+      const core = masks.core[p] || 0;
+      const ringWeight = clamp(edge * 1.08 + feather * 0.18 - core * 0.95, 0, 1);
+      if (alpha < 0.006 || ringWeight < 0.24 || core > 0.46) continue;
+
+      const gradient = gradientAt(alphaMap, width, x, y);
+      if (gradient.magnitude < 0.0018) continue;
+      const nx = gradient.gx / gradient.magnitude;
+      const ny = gradient.gy / gradient.magnitude;
+      const outer = findOuterAnchor(image, alphaMap, x, y, nx, ny, 6.5);
+      const inner = findInnerAnchor(image, alphaMap, masks, x, y, nx, ny, alpha, 6.5);
+      if (!outer || !inner) continue;
+
+      const predicted = bridgePrediction(outer, inner);
+      if (!predicted) continue;
+      const anchorDelta = (
+        Math.abs(outer.rgb[0] - inner.rgb[0])
+        + Math.abs(outer.rgb[1] - inner.rgb[1])
+        + Math.abs(outer.rgb[2] - inner.rgb[2])
+      ) / 3;
+      const structureGuard = smoothstep(26, 88, anchorDelta);
+      const span = outer.distance + inner.distance;
+      const spanGuard = smoothstep(5.5, 11, span);
+      const idx = p * 4;
+      const residual = (
+        Math.abs(predicted[0] - data[idx])
+        + Math.abs(predicted[1] - data[idx + 1])
+        + Math.abs(predicted[2] - data[idx + 2])
+      ) / 3;
+      const residualGate = smoothstep(2.5, 16, residual);
+      const blend = Math.min(
+        0.52,
+        safeStrength * ringWeight * residualGate * (1 - structureGuard * 0.86) * (1 - spanGuard * 0.42)
+      );
+      if (blend < 0.045) continue;
+
+      for (let c = 0; c < 3; c++) {
+        const delta = clamp(predicted[c] - data[idx + c], -32, 32);
+        out[idx + c] = clampByte(data[idx + c] + delta * blend);
+      }
+      finishingPixels++;
+      blendSum += blend;
+    }
+  }
+
+  return {
+    width,
+    height,
+    data: out,
+    edgeFinish: {
+      finishingPixels,
+      meanBlend: finishingPixels ? blendSum / finishingPixels : 0
+    }
+  };
+}
+
 export function applyNormalEdgeBridge(image, alphaMap, strength = 0.90) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0 || alphaMap.length !== image.width * image.height) return image;
@@ -150,13 +221,17 @@ export function applyNormalEdgeBridge(image, alphaMap, strength = 0.90) {
     }
   }
 
+  const bridged = { width, height, data: out };
+  const finished = applyMicroEdgeFinish(bridged, alphaMap, 0.48);
   return {
     width,
     height,
-    data: out,
+    data: finished.data,
     edgeBridge: {
       bridgedPixels,
-      meanBlend: bridgedPixels ? blendSum / bridgedPixels : 0
+      meanBlend: bridgedPixels ? blendSum / bridgedPixels : 0,
+      finishingPixels: finished.edgeFinish?.finishingPixels || 0,
+      finishingMeanBlend: finished.edgeFinish?.meanBlend || 0
     }
   };
 }
