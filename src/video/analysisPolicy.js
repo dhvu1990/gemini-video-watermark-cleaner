@@ -1,5 +1,6 @@
 export const QUICK_SAMPLE_COUNT = 3;
 export const QUICK_SCAN_FRACTION = 0.18;
+export const QUICK_RESIDUAL_SCORE_LIMIT = 18;
 
 export function quickConfidenceThreshold(minConfidence = 0.12) {
   const min = Number.isFinite(minConfidence) ? minConfidence : 0.12;
@@ -10,7 +11,10 @@ export function shouldAcceptQuickDetection(detection, minConfidence = 0.12) {
   if (!detection?.detected) return false;
   const confidence = Number(detection.confidence);
   const voteRatio = Number(detection.voteRatio);
+  const residualScore = Number(detection.calibration?.residualScore);
+  const residualAcceptable = !Number.isFinite(residualScore) || residualScore <= QUICK_RESIDUAL_SCORE_LIMIT;
   return Number.isFinite(confidence)
     && confidence >= quickConfidenceThreshold(minConfidence)
-    && (!Number.isFinite(voteRatio) || voteRatio >= 2 / 3);
+    && (!Number.isFinite(voteRatio) || voteRatio >= 2 / 3)
+    && residualAcceptable;
 }
