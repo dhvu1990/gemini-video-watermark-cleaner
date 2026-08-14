@@ -4,11 +4,20 @@ const fields = {
   shapeScale: document.getElementById('calShape'),
   edgeGain: document.getElementById('calEdgeGain'),
   edgeBoost: document.getElementById('calEdgeBoost'),
-  residualScore: document.getElementById('calResidual')
+  offsetX: document.getElementById('calOffsetX'),
+  offsetY: document.getElementById('calOffsetY'),
+  residualScore: document.getElementById('calResidual'),
+  residualEdge: document.getElementById('calResidualEdge'),
+  residualLow: document.getElementById('calResidualLow'),
+  residualHigh: document.getElementById('calResidualHigh')
 };
 
 function reset() {
   for (const field of Object.values(fields)) if (field) field.value = '-';
+}
+
+function format(value, digits = 3) {
+  return Number.isFinite(value) ? Number(value).toFixed(digits) : '-';
 }
 
 function render() {
@@ -17,11 +26,17 @@ function render() {
     const payload = JSON.parse(result.textContent || '{}');
     const calibration = payload?.detection?.calibration;
     if (!calibration) return reset();
+    const buckets = calibration.residualBuckets || {};
     fields.profile.value = calibration.profile || '-';
-    fields.shapeScale.value = Number.isFinite(calibration.shapeScale) ? calibration.shapeScale.toFixed(3) : '-';
-    fields.edgeGain.value = Number.isFinite(calibration.edgeGain) ? calibration.edgeGain.toFixed(2) : '-';
-    fields.edgeBoost.value = Number.isFinite(calibration.edgeBoost) ? calibration.edgeBoost.toFixed(3) : '-';
-    fields.residualScore.value = Number.isFinite(calibration.residualScore) ? calibration.residualScore.toFixed(3) : '-';
+    fields.shapeScale.value = format(calibration.shapeScale, 3);
+    fields.edgeGain.value = format(calibration.edgeGain, 2);
+    fields.edgeBoost.value = format(calibration.edgeBoost, 3);
+    fields.offsetX.value = format(calibration.offsetX, 2);
+    fields.offsetY.value = format(calibration.offsetY, 2);
+    fields.residualScore.value = format(calibration.residualScore, 3);
+    fields.residualEdge.value = format(buckets.edge, 3);
+    fields.residualLow.value = format(buckets.lowBody, 3);
+    fields.residualHigh.value = format(buckets.highBody, 3);
   } catch {
     reset();
   }
