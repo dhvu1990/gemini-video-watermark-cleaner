@@ -1,6 +1,6 @@
 # Gemini Video Watermark Cleaner
 
-**v1.0.8** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
+**v1.0.9** - local-first browser tool for cleaning the **visible** Gemini/Veo watermark overlay from videos you own or are authorized to edit.
 
 > This project does **not** attempt to remove invisible provenance/watermarking systems such as SynthID.
 
@@ -19,22 +19,21 @@ The implementation is independently structured, video-focused and local-first. S
 https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 ```
 
-## v1.0.8 highlights
+## v1.0.9 highlights
 
-- Automatic detection immediately after selecting a video.
-- Faster progressive quick scan: **3 frames over the first 18%** of the video, with a stricter acceptance threshold and automatic full-scan fallback when needed.
-- Visible spinner on the analysis button while quick/full analysis is running.
-- More compact portrait preview so the full-frame video is visually balanced with the two ROI zoom cards.
-- Detector geometry remains unchanged from the validated v1.0.7 path.
-- Cleanup now adds a lightweight browser-side **low-alpha edge enhancement** for the cleanup mask only.
-- After inverse-alpha restoration, an **edge-aware residual footprint cleanup** targets the remaining diamond outline while using a luma structure guard to reduce damage to real image detail.
-- The same cleanup path is used by `ZOOMED CLEANED` and full-video export, so the preview is a better representation of the expected result.
-- No ML/FDnCNN dependency is required for this release.
+- Adds a dedicated **4. Result preview** panel below Export.
+- The generated cleaned MP4 is attached directly to an in-browser video player after export completes.
+- Result player supports normal browser controls: play/pause, seek, volume and fullscreen where supported.
+- The existing **Download cleaned MP4** button continues to use the same generated local Blob URL.
+- Selecting a new source video or starting another clean pass resets the old result player and revokes the previous Blob URL to avoid retaining stale browser memory.
+- The page smoothly scrolls to the result panel after a successful export.
+- All v1.0.8 detector and cleanup behavior is unchanged.
 
 ## Main features
 
 - 100% local video processing in the browser; no media upload.
 - MP4/MOV/M4V/WebM file selection with MIME/extension fallback.
+- Automatic quick detection after file selection with full-scan fallback.
 - Full-frame preview with detected Gemini bounding box.
 - `ZOOMED ORIGINAL` and `ZOOMED CLEANED` ROI previews generated in a Web Worker.
 - Known 1080p, 720p and portrait Veo geometry candidates with local coordinate refinement.
@@ -43,6 +42,7 @@ https://dhvu1990.github.io/gemini-video-watermark-cleaner/
 - Inverse-alpha restoration, adaptive per-frame alpha, scene-cut reset and temporal stabilization.
 - Residual edge/footprint cleanup for the visible diamond border.
 - MediaBunny/WebCodecs AVC MP4 export with compatible encoded-audio passthrough.
+- Direct cleaned-video result preview in the browser before download.
 - Progress reporting, cancellation, tests, CI and GitHub Pages deployment.
 
 ## Quick start
@@ -56,6 +56,8 @@ npm run dev
 ```
 
 Choose or drop a Gemini/Veo video. Analysis starts automatically. A high-confidence quick result is shown immediately; otherwise the app expands to the configured full scan. Use **Re-analyze full video** only when you explicitly want another full detector pass.
+
+After **Clean video** completes, review the generated MP4 directly in **4. Result preview**. Download it only after the in-browser playback looks correct.
 
 ### Why `npm run setup:alpha`?
 
@@ -87,6 +89,8 @@ Detected region
   -> WebCodecs AVC encode
   -> encoded audio passthrough
   -> MediaBunny MP4 mux
+  -> local Blob URL
+  -> in-browser Result preview + optional download
 ```
 
 ## Supported layout priors
@@ -102,7 +106,7 @@ Detected region
 - **Full scan frames**: 12 is the normal fallback. Increase for unusually long or highly edited videos.
 - **Min confidence**: default 0.12; quick acceptance is deliberately stricter.
 - **Alpha gain**: normally keep the detected value.
-- **Edge polish**: default 0.35. v1.0.8 also applies bounded residual footprint cleanup, so avoid raising this aggressively unless testing shows it is needed.
+- **Edge polish**: default 0.35. Residual footprint cleanup is bounded, so avoid raising this aggressively unless testing shows it is needed.
 - **Adaptive alpha**: recommended.
 - **Temporal stabilization**: recommended for static/slow backgrounds.
 - **Manual override / Force cleanup**: only when automatic detection is uncertain.
