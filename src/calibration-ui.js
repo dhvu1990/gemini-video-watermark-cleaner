@@ -1,3 +1,4 @@
+const APP_VERSION = '1.0.29';
 const result = document.getElementById('detectResult');
 const fields = {
   profile: document.getElementById('calProfile'),
@@ -37,6 +38,11 @@ function deriveImprovement(calibration, finalCleanup) {
   const after = Number(finalCleanup?.after?.total);
   if (!Number.isFinite(before) || before <= 1e-6 || !Number.isFinite(after)) return null;
   return Math.max(-1, Math.min(1, (before - after) / before));
+}
+function syncVisibleVersion() {
+  document.title = `Gemini Video Watermark Cleaner v${APP_VERSION}`;
+  const firstBadge = document.querySelector('.badges span');
+  if (firstBadge) firstBadge.textContent = `v${APP_VERSION}`;
 }
 function render() {
   if (!result) return;
@@ -88,6 +94,7 @@ function render() {
     }
   } catch { reset(); }
 }
+syncVisibleVersion();
 if (result) {
   new MutationObserver(render).observe(result, { childList: true, subtree: true, characterData: true });
   render();
