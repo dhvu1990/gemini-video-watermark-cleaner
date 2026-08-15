@@ -60,7 +60,7 @@ test('dual-ring finish reduces ring residual while preserving core detail', () =
   });
 
   const before = measureDualRingResidual(damaged, alpha);
-  const repaired = applyDualRingLumaFinish(damaged, alpha, { strength: 0.72 });
+  const repaired = applyDualRingLumaFinish(damaged, alpha, { strength: 0.72, smoothBackground: false });
   const after = measureDualRingResidual(repaired, alpha);
   const ringMask = masks.inner.map((v, p) => Math.max(v, masks.outer[p]) > 0.18);
   const coreMask = masks.core.map((v) => v > 0.55);
@@ -78,7 +78,8 @@ test('easy low-residual case skips selective second pass', () => {
   const clean = image(width, height, (x, y) => [84 + x, 104 + Math.floor(y * 0.7), 138 + ((x + y) % 3)]);
   const repaired = applyDualRingLumaFinish(clean, alpha, {
     strength: 0.56,
-    secondPassThreshold: 1.05
+    secondPassThreshold: 1.05,
+    smoothBackground: false
   });
 
   assert.equal(repaired.dualRingFinish.secondPass.attempted, false);
@@ -101,12 +102,14 @@ test('hard shape-aligned residual may run second pass but never accepts a worse 
 
   const primaryOnly = applyDualRingLumaFinish(hard, alpha, {
     strength: 0.56,
-    secondPass: false
+    secondPass: false,
+    smoothBackground: false
   });
   const adaptive = applyDualRingLumaFinish(hard, alpha, {
     strength: 0.56,
     secondPassThreshold: 0.20,
-    structureStrength: 0.40
+    structureStrength: 0.40,
+    smoothBackground: false
   });
   const primaryResidual = measureDualRingResidual(primaryOnly, alpha);
   const adaptiveResidual = measureDualRingResidual(adaptive, alpha);

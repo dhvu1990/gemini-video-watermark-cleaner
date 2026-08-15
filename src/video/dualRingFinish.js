@@ -1,4 +1,5 @@
 import { buildHybridRepairMask } from './textureRepair.js';
+import { analyzeSmoothBackground, applySmoothBackgroundReconstruction } from './smoothBackground.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -306,6 +307,20 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     }
   }
 
+  const smoothAnalysis = options.smoothBackground === false
+    ? { safe: false, mode: 'structured', reason: 'disabled' }
+    : analyzeSmoothBackground(selected, alphaMap, options.smoothBackgroundOptions || {});
+  let smoothBackground = { applied: false, ...smoothAnalysis };
+  if (smoothAnalysis.safe) {
+    const smoothCandidate = applySmoothBackgroundReconstruction(selected, alphaMap, smoothAnalysis, {
+      strength: options.smoothStrength ?? 0.995,
+      dilationRadius: options.smoothDilationRadius ?? 4,
+      microSmooth: options.smoothMicroBlur ?? 0.18
+    });
+    selected = { width: smoothCandidate.width, height: smoothCandidate.height, data: smoothCandidate.data };
+    smoothBackground = smoothCandidate.smoothBackground;
+  }
+
   const after = measureDualRingResidual(selected, alphaMap);
   const improvement = before.total > 1e-6 ? (before.total - after.total) / before.total : 0;
   return {
@@ -319,7 +334,9 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
       improvement,
       correctedPixels: primary.correctedPixels + (secondPass.accepted ? secondPass.correctedPixels : 0),
       meanAbsLumaDelta: primary.correctedPixels ? primary.meanAbsLumaDelta : 0,
-      secondPass
-    }
+      secondPass,
+      smoothBackground
+    },
+    smoothBackground
   };
 }

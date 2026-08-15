@@ -1,6 +1,6 @@
 import { cleanVideo, inspectVideo } from './engine.js';
 
-const APP_VERSION = '1.0.21';
+const APP_VERSION = '1.0.22';
 let cancelled = false;
 
 function shouldCancel() { return cancelled; }

@@ -13,17 +13,14 @@ const fields = {
   finalTotal: document.getElementById('finalResidualTotal'),
   finalLuma: document.getElementById('finalResidualLuma'),
   finalChroma: document.getElementById('finalResidualChroma'),
-  finalImprovement: document.getElementById('finalResidualImprovement')
+  finalImprovement: document.getElementById('finalResidualImprovement'),
+  backgroundMode: document.getElementById('backgroundMode'),
+  backgroundComplexity: document.getElementById('backgroundComplexity'),
+  backgroundSurfaceMae: document.getElementById('backgroundSurfaceMae'),
+  backgroundEdgeDensity: document.getElementById('backgroundEdgeDensity')
 };
-
-function reset() {
-  for (const field of Object.values(fields)) if (field) field.value = '-';
-}
-
-function format(value, digits = 3) {
-  return Number.isFinite(value) ? Number(value).toFixed(digits) : '-';
-}
-
+function reset() { for (const field of Object.values(fields)) if (field) field.value = '-'; }
+function format(value, digits = 3) { return Number.isFinite(value) ? Number(value).toFixed(digits) : '-'; }
 function deriveImprovement(calibration, finalCleanup) {
   const reported = finalCleanup?.improvement;
   if (Number.isFinite(reported) && Math.abs(reported) > 1e-6) return reported;
@@ -32,7 +29,6 @@ function deriveImprovement(calibration, finalCleanup) {
   if (!Number.isFinite(before) || before <= 1e-6 || !Number.isFinite(after)) return null;
   return Math.max(-1, Math.min(1, (before - after) / before));
 }
-
 function render() {
   if (!result) return;
   try {
@@ -50,21 +46,20 @@ function render() {
     fields.residualEdge.value = format(buckets.edge, 3);
     fields.residualLow.value = format(buckets.lowBody, 3);
     fields.residualHigh.value = format(buckets.highBody, 3);
-
     const finalCleanup = payload?.finalCleanup;
     const after = finalCleanup?.after || {};
     if (fields.finalTotal) fields.finalTotal.value = format(after.total, 3);
     if (fields.finalLuma) fields.finalLuma.value = format(after.luma, 3);
     if (fields.finalChroma) fields.finalChroma.value = format(after.chroma, 3);
     const improvement = deriveImprovement(calibration, finalCleanup);
-    if (fields.finalImprovement) fields.finalImprovement.value = Number.isFinite(improvement)
-      ? `${(improvement * 100).toFixed(1)}%`
-      : '-';
-  } catch {
-    reset();
-  }
+    if (fields.finalImprovement) fields.finalImprovement.value = Number.isFinite(improvement) ? `${(improvement * 100).toFixed(1)}%` : '-';
+    const background = payload?.adaptiveBackground || {};
+    if (fields.backgroundMode) fields.backgroundMode.value = background.mode || '-';
+    if (fields.backgroundComplexity) fields.backgroundComplexity.value = format(background.complexity, 3);
+    if (fields.backgroundSurfaceMae) fields.backgroundSurfaceMae.value = format(background.surfaceMae, 3);
+    if (fields.backgroundEdgeDensity) fields.backgroundEdgeDensity.value = format(background.edgeDensity, 3);
+  } catch { reset(); }
 }
-
 if (result) {
   new MutationObserver(render).observe(result, { childList: true, subtree: true, characterData: true });
   render();
