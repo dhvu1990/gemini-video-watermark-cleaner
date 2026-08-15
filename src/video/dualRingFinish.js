@@ -1,5 +1,7 @@
 import { buildHybridRepairMask } from './textureRepair.js';
 import { analyzeSmoothBackground, applySmoothBackgroundReconstruction } from './smoothBackground.js';
+import { stabilizeSmoothBackgroundMode } from './adaptiveFinish.js';
+import { measurePostCleanupResidual } from './edgeBridge.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -54,7 +56,6 @@ export function buildDualRingMask(alphaMap, width, height) {
   const cy = (height - 1) / 2;
   const halfW = Math.max(1, width / 2);
   const halfH = Math.max(1, height / 2);
-
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = y * width + x;
@@ -63,12 +64,10 @@ export function buildDualRingMask(alphaMap, width, height) {
       const feather = hybrid.feather[p] || 0;
       const core = hybrid.core[p] || 0;
       if (a <= 0.003 || edge + feather < 0.03) continue;
-
       const lowAlpha = 1 - smoothstep(0.09, 0.22, a);
       const midAlpha = smoothstep(0.055, 0.18, a) * (1 - smoothstep(0.28, 0.48, a));
       outer[p] = clamp((edge * 0.86 + feather * 0.44) * lowAlpha * (1 - core * 0.90), 0, 1);
       inner[p] = clamp((edge * 0.58 + feather * 0.62) * midAlpha * (1 - core * 0.72), 0, 1);
-
       const nx = Math.abs(x - cx) / halfW;
       const ny = Math.abs(y - cy) / halfH;
       const axisTip = Math.max((1 - nx) * ny, nx * (1 - ny));
@@ -111,7 +110,6 @@ export function measureDualRingResidual(image, alphaMap) {
   let innerSum = 0, innerWeight = 0;
   let outerSum = 0, outerWeight = 0;
   let cornerSum = 0, cornerWeight = 0;
-
   for (let y = 2; y < height - 2; y++) {
     for (let x = 2; x < width - 2; x++) {
       const p = y * width + x;
@@ -134,7 +132,6 @@ export function measureDualRingResidual(image, alphaMap) {
       cornerSum += residual * cw; cornerWeight += cw;
     }
   }
-
   const inner = innerWeight ? innerSum / innerWeight : 0;
   const outer = outerWeight ? outerSum / outerWeight : 0;
   const corner = cornerWeight ? cornerSum / cornerWeight : 0;
@@ -149,7 +146,6 @@ function applyPrimaryDualRingPass(image, alphaMap, strength) {
   const out = new Uint8ClampedArray(data);
   let correctedPixels = 0;
   let lumaDeltaSum = 0;
-
   for (let y = 2; y < height - 2; y++) {
     for (let x = 2; x < width - 2; x++) {
       const p = y * width + x;
@@ -159,7 +155,6 @@ function applyPrimaryDualRingPass(image, alphaMap, strength) {
       const core = masks.core[p] || 0;
       const ringWeight = clamp(inner * 0.72 + outer * 1.00 + corner * 0.18 - core * 0.88, 0, 1);
       if (ringWeight < 0.14 || core > 0.52) continue;
-
       const gradient = gradientAt(alphaMap, width, x, y);
       if (gradient.magnitude < 0.0015) continue;
       const nx = gradient.gx / gradient.magnitude;
@@ -175,28 +170,19 @@ function applyPrimaryDualRingPass(image, alphaMap, strength) {
       const cornerBoost = 1 + corner * 0.16;
       const blend = Math.min(0.46, strength * ringWeight * residualGate * cornerBoost * (1 - structureGuard * 0.86));
       if (blend < 0.035) continue;
-
       const yDelta = clamp(residual, -18, 18) * blend;
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] + yDelta);
       correctedPixels++;
       lumaDeltaSum += Math.abs(yDelta);
     }
   }
-
-  return {
-    image: { width, height, data: out },
-    correctedPixels,
-    meanAbsLumaDelta: correctedPixels ? lumaDeltaSum / correctedPixels : 0
-  };
+  return { image: { width, height, data: out }, correctedPixels, meanAbsLumaDelta: correctedPixels ? lumaDeltaSum / correctedPixels : 0 };
 }
 
 export function measureInnerStructureResidual(image, alphaMap) {
   const { width, height, data } = image;
   const hybrid = buildHybridRepairMask(alphaMap, width, height);
-  let scoreSum = 0;
-  let weightSum = 0;
-  let samples = 0;
-
+  let scoreSum = 0, weightSum = 0, samples = 0;
   for (let y = 2; y < height - 2; y++) {
     for (let x = 2; x < width - 2; x++) {
       const p = y * width + x;
@@ -220,7 +206,6 @@ export function measureInnerStructureResidual(image, alphaMap) {
       samples++;
     }
   }
-
   return { score: weightSum ? scoreSum / weightSum : 0, samples };
 }
 
@@ -229,9 +214,7 @@ function applyInnerStructureBreaker(image, alphaMap, strength = 0.34) {
   const { width, height, data } = image;
   const hybrid = buildHybridRepairMask(alphaMap, width, height);
   const out = new Uint8ClampedArray(data);
-  let correctedPixels = 0;
-  let deltaSum = 0;
-
+  let correctedPixels = 0, deltaSum = 0;
   for (let y = 2; y < height - 2; y++) {
     for (let x = 2; x < width - 2; x++) {
       const p = y * width + x;
@@ -259,12 +242,7 @@ function applyInnerStructureBreaker(image, alphaMap, strength = 0.34) {
       deltaSum += Math.abs(yDelta);
     }
   }
-
-  return {
-    image: { width, height, data: out },
-    correctedPixels,
-    meanAbsLumaDelta: correctedPixels ? deltaSum / correctedPixels : 0
-  };
+  return { image: { width, height, data: out }, correctedPixels, meanAbsLumaDelta: correctedPixels ? deltaSum / correctedPixels : 0 };
 }
 
 export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
@@ -276,20 +254,8 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
   const primary = applyPrimaryDualRingPass(image, alphaMap, strength);
   const primaryAfter = measureDualRingResidual(primary.image, alphaMap);
   const structureBefore = measureInnerStructureResidual(primary.image, alphaMap);
-
   let selected = primary.image;
-  let secondPass = {
-    attempted: false,
-    accepted: false,
-    enabled: secondPassEnabled,
-    threshold: secondPassThreshold,
-    triggerResidual: primaryAfter.total,
-    structureBefore,
-    structureAfter: structureBefore,
-    correctedPixels: 0,
-    meanAbsLumaDelta: 0
-  };
-
+  let secondPass = { attempted: false, accepted: false, enabled: secondPassEnabled, threshold: secondPassThreshold, triggerResidual: primaryAfter.total, structureBefore, structureAfter: structureBefore, correctedPixels: 0, meanAbsLumaDelta: 0 };
   if (secondPassEnabled && (primaryAfter.total >= secondPassThreshold || structureBefore.score >= 4.0)) {
     secondPass.attempted = true;
     const candidatePass = applyInnerStructureBreaker(primary.image, alphaMap, options.structureStrength ?? 0.34);
@@ -307,22 +273,29 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     }
   }
 
+  const finalBefore = measurePostCleanupResidual(selected, alphaMap);
   const smoothAnalysis = options.smoothBackground === false
     ? { safe: false, mode: 'structured', reason: 'disabled' }
     : analyzeSmoothBackground(selected, alphaMap, options.smoothBackgroundOptions || {});
-  let smoothBackground = { applied: false, ...smoothAnalysis };
-  if (smoothAnalysis.safe) {
-    const smoothCandidate = applySmoothBackgroundReconstruction(selected, alphaMap, smoothAnalysis, {
+  const decision = options.smoothBackground === false
+    ? { mode: 'structured', rawMode: 'structured', held: false, switched: false, hardUnsafe: false, temporal: { enabled: false, mode: 'structured', rawMode: 'structured', switches: 0, heldFrames: 0 } }
+    : stabilizeSmoothBackgroundMode(smoothAnalysis, options.smoothModeOptions || {});
+  let smoothBackground = { applied: false, ...smoothAnalysis, mode: decision.mode, rawMode: decision.rawMode, temporal: decision.temporal, held: decision.held, switched: decision.switched, hardUnsafe: decision.hardUnsafe };
+  if (decision.mode === 'smooth-rebuild' && smoothAnalysis?.coefficients) {
+    const smoothCandidate = applySmoothBackgroundReconstruction(selected, alphaMap, { ...smoothAnalysis, safe: true }, {
       strength: options.smoothStrength ?? 0.995,
       dilationRadius: options.smoothDilationRadius ?? 4,
       microSmooth: options.smoothMicroBlur ?? 0.18
     });
     selected = { width: smoothCandidate.width, height: smoothCandidate.height, data: smoothCandidate.data };
-    smoothBackground = smoothCandidate.smoothBackground;
+    smoothBackground = { ...smoothCandidate.smoothBackground, mode: 'smooth-rebuild', rawMode: decision.rawMode, temporal: decision.temporal, held: decision.held, switched: decision.switched, hardUnsafe: decision.hardUnsafe };
   }
 
   const after = measureDualRingResidual(selected, alphaMap);
   const improvement = before.total > 1e-6 ? (before.total - after.total) / before.total : 0;
+  const finalAfter = measurePostCleanupResidual(selected, alphaMap);
+  const finalImprovement = finalBefore.total > 1e-6 ? clamp((finalBefore.total - finalAfter.total) / finalBefore.total, -1, 1) : 0;
+  const finalCleanup = { before: finalBefore, after: finalAfter, improvement: finalImprovement, source: smoothBackground.applied ? 'post-smooth-rebuild' : 'post-structured-finish' };
   return {
     width: selected.width,
     height: selected.height,
@@ -335,8 +308,10 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
       correctedPixels: primary.correctedPixels + (secondPass.accepted ? secondPass.correctedPixels : 0),
       meanAbsLumaDelta: primary.correctedPixels ? primary.meanAbsLumaDelta : 0,
       secondPass,
-      smoothBackground
+      smoothBackground,
+      finalCleanup
     },
-    smoothBackground
+    smoothBackground,
+    finalCleanup
   };
 }

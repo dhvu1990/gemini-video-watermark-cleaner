@@ -1,6 +1,7 @@
 import { cleanVideo, inspectVideo } from './engine.js';
+import { resetAdaptiveFinishState } from './adaptiveFinish.js';
 
-const APP_VERSION = '1.0.22';
+const APP_VERSION = '1.0.23';
 let cancelled = false;
 
 function shouldCancel() { return cancelled; }
@@ -18,6 +19,7 @@ self.onmessage = async (event) => {
 
   try {
     if (message.type === 'inspect') {
+      resetAdaptiveFinishState();
       const quickScan = String(tag || '').startsWith('quick:');
       const result = await inspectVideo(message.file, {
         ...message.options,
@@ -34,6 +36,7 @@ self.onmessage = async (event) => {
     }
 
     if (message.type === 'process') {
+      resetAdaptiveFinishState();
       const result = await cleanVideo(message.file, { ...message.options, onProgress: progress, shouldCancel });
       if (cancelled) return self.postMessage({ type: 'cancelled', tag });
       const raw = result.buffer;
