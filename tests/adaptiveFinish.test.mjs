@@ -96,7 +96,7 @@ test('smooth rebuild reports diagnostics after the final reconstructed output', 
   const alpha = diamondAlpha(width, height);
   const clean = makeImage(width, height, (x, y) => [40 + x * 0.45, 100 + y * 0.18, 172 + x * 0.15]);
   const watermarked = overlayWhite(clean, alpha);
-  const result = applyDualRingLumaFinish(watermarked, alpha, { strength: 0.56 });
+  const result = applyDualRingLumaFinish(watermarked, alpha, { strength: 0.56, emptyZoneHard: false });
   assert.equal(result.smoothBackground.mode, 'smooth-rebuild');
   assert.equal(result.smoothBackground.applied, true);
   assert.equal(result.dualRingFinish.finalCleanup.source, 'post-smooth-rebuild');
