@@ -58,7 +58,7 @@ function renderDetection(result, { source = 'full' } = {}) {
   detection = result; const d = result?.detection; const meta = result?.metadata; const preview = result?.preview;
   els.previewPanel.classList.toggle('portrait', Boolean(meta?.height > meta?.width));
   if (d?.position) { els.wmX.value = d.position.x; els.wmY.value = d.position.y; els.wmSize.value = d.position.width; if (Number.isFinite(d.alphaGain)) els.alphaGain.value = d.alphaGain.toFixed(3); }
-  const finalCleanup = preview?.edgeBridge ? { before: preview.edgeBridge.finalResidualBefore || null, after: preview.edgeBridge.finalResidualAfter || null, improvement: preview.edgeBridge.finalResidualImprovement ?? null, correctedPixels: preview.edgeBridge.quadrantPixels ?? 0 } : null;
+  const finalCleanup = preview?.dualRingFinish?.finalCleanup || (preview?.edgeBridge ? { before: preview.edgeBridge.finalResidualBefore || null, after: preview.edgeBridge.finalResidualAfter || null, improvement: preview.edgeBridge.finalResidualImprovement ?? null, correctedPixels: preview.edgeBridge.quadrantPixels ?? 0 } : null);
   const adaptiveBackground = preview?.dualRingFinish?.smoothBackground || null;
   els.detectResult.textContent = JSON.stringify({ metadata: meta, detection: d, finalCleanup, adaptiveBackground }, null, 2);
   els.previewPanel.classList.remove('hidden'); if (preview?.original) drawRoi(els.originalZoom, preview.original); if (preview?.cleaned) drawRoi(els.cleanedZoom, preview.cleaned); seekPreview(preview?.timestamp);
