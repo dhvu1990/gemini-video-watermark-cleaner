@@ -270,6 +270,7 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
   const strength = clamp(Number(options.strength ?? 0.56), 0, 1);
   if (strength <= 0 || alphaMap.length !== image.width * image.height) return image;
   const secondPassThreshold = Number.isFinite(options.secondPassThreshold) ? options.secondPassThreshold : 1.05;
+  const secondPassEnabled = options.secondPass !== false;
   const before = measureDualRingResidual(image, alphaMap);
   const primary = applyPrimaryDualRingPass(image, alphaMap, strength);
   const primaryAfter = measureDualRingResidual(primary.image, alphaMap);
@@ -279,6 +280,7 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
   let secondPass = {
     attempted: false,
     accepted: false,
+    enabled: secondPassEnabled,
     threshold: secondPassThreshold,
     triggerResidual: primaryAfter.total,
     structureBefore,
@@ -287,7 +289,7 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     meanAbsLumaDelta: 0
   };
 
-  if (primaryAfter.total >= secondPassThreshold || structureBefore.score >= 4.0) {
+  if (secondPassEnabled && (primaryAfter.total >= secondPassThreshold || structureBefore.score >= 4.0)) {
     secondPass.attempted = true;
     const candidatePass = applyInnerStructureBreaker(primary.image, alphaMap, options.structureStrength ?? 0.34);
     const candidateResidual = measureDualRingResidual(candidatePass.image, alphaMap);
