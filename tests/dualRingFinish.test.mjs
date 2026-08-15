@@ -101,7 +101,7 @@ test('hard shape-aligned residual may run second pass but never accepts a worse 
 
   const primaryOnly = applyDualRingLumaFinish(hard, alpha, {
     strength: 0.56,
-    secondPassThreshold: 999
+    secondPass: false
   });
   const adaptive = applyDualRingLumaFinish(hard, alpha, {
     strength: 0.56,
@@ -113,6 +113,8 @@ test('hard shape-aligned residual may run second pass but never accepts a worse 
   const primaryStructure = measureInnerStructureResidual(primaryOnly, alpha);
   const adaptiveStructure = measureInnerStructureResidual(adaptive, alpha);
 
+  assert.equal(primaryOnly.dualRingFinish.secondPass.enabled, false);
+  assert.equal(primaryOnly.dualRingFinish.secondPass.attempted, false);
   assert.equal(adaptive.dualRingFinish.secondPass.attempted, true);
   assert.ok(adaptiveResidual.total <= primaryResidual.total * 1.016);
   if (adaptive.dualRingFinish.secondPass.accepted) {
