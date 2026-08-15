@@ -1,5 +1,6 @@
 import { cleanVideo, inspectVideo } from './engine.js';
 
+const APP_VERSION = '1.0.21';
 let cancelled = false;
 
 function shouldCancel() { return cancelled; }
@@ -39,7 +40,8 @@ self.onmessage = async (event) => {
       const buffer = raw instanceof ArrayBuffer
         ? raw
         : raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
-      self.postMessage({ type: 'process-result', tag, buffer, meta: result.meta }, [buffer]);
+      const meta = { ...(result.meta || {}), version: APP_VERSION };
+      self.postMessage({ type: 'process-result', tag, buffer, meta }, [buffer]);
     }
   } catch (error) {
     if (cancelled || error?.name === 'AbortError') {

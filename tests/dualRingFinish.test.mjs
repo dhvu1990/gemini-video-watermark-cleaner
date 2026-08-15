@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyDualRingLumaFinish, buildDualRingMask, measureDualRingResidual } from '../src/video/dualRingFinish.js';
+import {
+  applyDualRingLumaFinish,
+  buildDualRingMask,
+  measureDualRingResidual,
+  measureInnerStructureResidual
+} from '../src/video/dualRingFinish.js';
 
 function image(width, height, fn) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -65,6 +70,59 @@ test('dual-ring finish reduces ring residual while preserving core detail', () =
   assert.ok(repaired.dualRingFinish.improvement > 0);
   assert.ok(mae(repaired, clean, ringMask) < mae(damaged, clean, ringMask));
   assert.ok(mae(repaired, damaged, coreMask) < 0.75);
+});
+
+test('easy low-residual case skips selective second pass', () => {
+  const width = 51, height = 51;
+  const alpha = diamondAlpha(width, height);
+  const clean = image(width, height, (x, y) => [84 + x, 104 + Math.floor(y * 0.7), 138 + ((x + y) % 3)]);
+  const repaired = applyDualRingLumaFinish(clean, alpha, {
+    strength: 0.56,
+    secondPassThreshold: 1.05
+  });
+
+  assert.equal(repaired.dualRingFinish.secondPass.attempted, false);
+  assert.equal(repaired.dualRingFinish.secondPass.accepted, false);
+});
+
+test('hard shape-aligned residual may run second pass but never accepts a worse result', () => {
+  const width = 51, height = 51;
+  const alpha = diamondAlpha(width, height);
+  const masks = buildDualRingMask(alpha, width, height);
+  const clean = image(width, height, (x, y) => [60 + x * 2, 76 + y, 116 + ((x * 3 + y) % 5)]);
+  const hard = image(width, height, (x, y) => {
+    const p = y * width + x;
+    const i = p * 4;
+    const a = alpha[p] || 0;
+    const edge = masks.inner[p] || 0;
+    const skeleton = a >= 0.10 && a <= 0.40 && edge > 0.02 ? 18 : 0;
+    return [clean.data[i] - skeleton, clean.data[i + 1] - skeleton, clean.data[i + 2] - skeleton];
+  });
+
+  const primaryOnly = applyDualRingLumaFinish(hard, alpha, {
+    strength: 0.56,
+    secondPass: false
+  });
+  const adaptive = applyDualRingLumaFinish(hard, alpha, {
+    strength: 0.56,
+    secondPassThreshold: 0.20,
+    structureStrength: 0.40
+  });
+  const primaryResidual = measureDualRingResidual(primaryOnly, alpha);
+  const adaptiveResidual = measureDualRingResidual(adaptive, alpha);
+  const primaryStructure = measureInnerStructureResidual(primaryOnly, alpha);
+  const adaptiveStructure = measureInnerStructureResidual(adaptive, alpha);
+
+  assert.equal(primaryOnly.dualRingFinish.secondPass.enabled, false);
+  assert.equal(primaryOnly.dualRingFinish.secondPass.attempted, false);
+  assert.equal(adaptive.dualRingFinish.secondPass.attempted, true);
+  assert.ok(adaptiveResidual.total <= primaryResidual.total * 1.016);
+  if (adaptive.dualRingFinish.secondPass.accepted) {
+    assert.ok(
+      adaptiveResidual.total < primaryResidual.total || adaptiveStructure.score < primaryStructure.score,
+      'accepted pass must improve residual or shape-aligned structure'
+    );
+  }
 });
 
 test('corner mask emphasizes diamond tips without marking the center core', () => {
