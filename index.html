@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
-  <title>Gemini Video Watermark Cleaner v1.0.25</title>
+  <title>Gemini Video Watermark Cleaner v1.0.26</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
@@ -12,8 +12,8 @@
     <header class="hero">
       <p class="eyebrow">LOCAL-FIRST VIDEO TOOL</p>
       <h1>Gemini Video Watermark Cleaner</h1>
-      <p>Automatic multi-frame detection, adaptive smooth-background reconstruction, safe empty-zone hard suppression, temporally stable mode selection, structured residual ring suppression, accurate final diagnostics, detail-preserving restoration, and local MP4 export.</p>
-      <div class="badges"><span>v1.0.25</span><span>Auto detect</span><span>Adaptive background</span><span>Empty-zone hard suppression</span><span>Structured ring suppression</span><span>Temporal mode stability</span><span>Accurate final diagnostics</span><span>Smooth rebuild</span><span>Structured fallback</span><span>Subpixel alpha</span><span>Residual buckets</span><span>Hybrid core/ring restore</span><span>Normal edge bridge</span><span>Dual-ring luma finish</span><span>Selective second pass</span><span>Multi-frame atlas</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
+      <p>Automatic multi-frame detection, adaptive smooth-background reconstruction, safe empty-zone hard suppression, temporally stable mode selection, structured residual ring suppression with micro-salvage, accurate final diagnostics, detail-preserving restoration, and local MP4 export.</p>
+      <div class="badges"><span>v1.0.26</span><span>Auto detect</span><span>Adaptive background</span><span>Empty-zone hard suppression</span><span>Structured ring suppression</span><span>Structured micro salvage</span><span>Temporal mode stability</span><span>Accurate final diagnostics</span><span>Smooth rebuild</span><span>Structured fallback</span><span>Subpixel alpha</span><span>Residual buckets</span><span>Hybrid core/ring restore</span><span>Normal edge bridge</span><span>Dual-ring luma finish</span><span>Selective second pass</span><span>Multi-frame atlas</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
     </header>
 
     <section class="panel">
@@ -127,7 +127,7 @@
           </div>
         </div>
         <label class="check"><input id="adaptiveAlpha" type="checkbox" checked /> Adaptive body gain with calibration clamp</label>
-        <label class="check"><input id="temporalStabilize" type="checkbox" checked /> Empty-zone hard suppression + smooth rebuild + structured ring suppression + temporal mode stability + detail-preserving fallback + atlas</label>
+        <label class="check"><input id="temporalStabilize" type="checkbox" checked /> Empty-zone hard suppression + smooth rebuild + structured ring micro-salvage + temporal mode stability + detail-preserving fallback + atlas</label>
         <label class="check"><input id="forceCleanup" type="checkbox" /> Force cleanup when confidence is low</label>
       </div>
     </section>

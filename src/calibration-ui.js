@@ -75,8 +75,17 @@ function render() {
     if (fields.emptyZoneImprovement) fields.emptyZoneImprovement.value = Number.isFinite(hard.improvement) ? `${(hard.improvement * 100).toFixed(1)}%` : '-';
     const structured = background.structuredRing || {};
     if (fields.structuredAttempted) fields.structuredAttempted.value = bool(structured.attempted);
-    if (fields.structuredAccepted) fields.structuredAccepted.value = bool(structured.accepted);
-    if (fields.structuredCandidateResidual) fields.structuredCandidateResidual.value = format(structured.candidateAfter?.total, 3);
+    if (fields.structuredAccepted) {
+      fields.structuredAccepted.value = structured.accepted
+        ? (structured.acceptedMode === 'micro-salvage' ? 'YES (micro)' : 'YES')
+        : (structured.salvageAttempted ? 'NO (micro tried)' : bool(structured.accepted));
+    }
+    if (fields.structuredCandidateResidual) {
+      const candidate = structured.salvageAttempted
+        ? structured.salvageCandidateAfter?.total
+        : structured.candidateAfter?.total;
+      fields.structuredCandidateResidual.value = format(candidate, 3);
+    }
   } catch { reset(); }
 }
 if (result) {
