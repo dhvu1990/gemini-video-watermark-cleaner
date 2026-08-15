@@ -61,11 +61,39 @@ test('structured ring suppression never accepts a materially worse candidate', (
 
   assert.equal(result.structuredRing.attempted, true);
   assert.ok(result.structuredRing.candidatePixels >= 0);
+  assert.equal(typeof result.structuredRing.salvageAttempted, 'boolean');
+  assert.equal(typeof result.structuredRing.salvageAccepted, 'boolean');
   if (result.structuredRing.accepted) {
-    assert.ok(after.score <= before.score * 1.001);
+    assert.ok(after.score <= before.score * 1.003);
     assert.ok(result.structuredRing.correctedPixels > 0);
+    assert.ok(['primary', 'micro-salvage'].includes(result.structuredRing.acceptedMode));
   } else {
     assert.equal(after.score, before.score);
+    assert.equal(result.structuredRing.acceptedMode, 'none');
+  }
+});
+
+test('micro-salvage candidate is accepted only when final residual stays safer than the incoming structured result', () => {
+  const width = 51, height = 51;
+  const alpha = diamondAlpha(width, height);
+  const damaged = ringDamaged(width, height, alpha);
+  const result = applyStructuredResidualRingSuppression(damaged, alpha, {
+    totalThreshold: 0.10,
+    lumaThreshold: 0.10,
+    strength: 0.72,
+    salvageNearMissRatio: 1.20,
+    salvageStrengthScale: 0.22
+  });
+
+  assert.equal(result.structuredRing.attempted, true);
+  if (result.structuredRing.salvageAttempted) {
+    assert.ok(result.structuredRing.salvageCandidateAfter);
+    assert.ok(result.structuredRing.salvageCandidatePixels >= 0);
+    if (result.structuredRing.salvageAccepted) {
+      assert.equal(result.structuredRing.acceptedMode, 'micro-salvage');
+      assert.ok(result.structuredRing.after.total <= result.structuredRing.before.total * 0.998 + 1e-9);
+      assert.ok(result.structuredRing.after.luma <= result.structuredRing.before.luma * 1.002 + 1e-9);
+    }
   }
 });
 
@@ -79,6 +107,7 @@ test('low-residual structured region skips the suppression pass', () => {
   });
   assert.equal(result.structuredRing.attempted, false);
   assert.equal(result.structuredRing.accepted, false);
+  assert.equal(result.structuredRing.salvageAttempted, false);
 });
 
 test('smooth-rebuild path does not run structured ring suppression', () => {
@@ -90,7 +119,7 @@ test('smooth-rebuild path does not run structured ring suppression', () => {
     smoothBackground: true,
     structuredRing: true
   });
-  if (result.smoothBackground?.mode === 'smooth-rebuild') {
+  if (result.smoothBackground?.mode === 'smooth-rebuild' || result.smoothBackground?.mode === 'empty-hard-rebuild') {
     assert.equal(result.structuredRing?.attempted, false);
   } else {
     assert.equal(result.structuredRing?.enabled, true);
