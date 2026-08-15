@@ -17,10 +17,19 @@ const fields = {
   backgroundMode: document.getElementById('backgroundMode'),
   backgroundComplexity: document.getElementById('backgroundComplexity'),
   backgroundSurfaceMae: document.getElementById('backgroundSurfaceMae'),
-  backgroundEdgeDensity: document.getElementById('backgroundEdgeDensity')
+  backgroundEdgeDensity: document.getElementById('backgroundEdgeDensity'),
+  emptyZoneEligible: document.getElementById('emptyZoneEligible'),
+  emptyZoneAttempted: document.getElementById('emptyZoneAttempted'),
+  emptyZoneAccepted: document.getElementById('emptyZoneAccepted'),
+  emptyZoneCandidateResidual: document.getElementById('emptyZoneCandidateResidual'),
+  emptyZoneImprovement: document.getElementById('emptyZoneImprovement'),
+  structuredAttempted: document.getElementById('structuredAttempted'),
+  structuredAccepted: document.getElementById('structuredAccepted'),
+  structuredCandidateResidual: document.getElementById('structuredCandidateResidual')
 };
 function reset() { for (const field of Object.values(fields)) if (field) field.value = '-'; }
 function format(value, digits = 3) { return Number.isFinite(value) ? Number(value).toFixed(digits) : '-'; }
+function bool(value) { return typeof value === 'boolean' ? (value ? 'YES' : 'NO') : '-'; }
 function deriveImprovement(calibration, finalCleanup) {
   const reported = finalCleanup?.improvement;
   if (Number.isFinite(reported) && Math.abs(reported) > 1e-6) return reported;
@@ -58,6 +67,16 @@ function render() {
     if (fields.backgroundComplexity) fields.backgroundComplexity.value = format(background.complexity, 3);
     if (fields.backgroundSurfaceMae) fields.backgroundSurfaceMae.value = format(background.surfaceMae, 3);
     if (fields.backgroundEdgeDensity) fields.backgroundEdgeDensity.value = format(background.edgeDensity, 3);
+    const hard = background.emptyZoneHard || {};
+    if (fields.emptyZoneEligible) fields.emptyZoneEligible.value = bool(hard.eligible);
+    if (fields.emptyZoneAttempted) fields.emptyZoneAttempted.value = bool(hard.attempted);
+    if (fields.emptyZoneAccepted) fields.emptyZoneAccepted.value = bool(hard.accepted);
+    if (fields.emptyZoneCandidateResidual) fields.emptyZoneCandidateResidual.value = format(hard.candidateAfter?.total, 3);
+    if (fields.emptyZoneImprovement) fields.emptyZoneImprovement.value = Number.isFinite(hard.improvement) ? `${(hard.improvement * 100).toFixed(1)}%` : '-';
+    const structured = background.structuredRing || {};
+    if (fields.structuredAttempted) fields.structuredAttempted.value = bool(structured.attempted);
+    if (fields.structuredAccepted) fields.structuredAccepted.value = bool(structured.accepted);
+    if (fields.structuredCandidateResidual) fields.structuredCandidateResidual.value = format(structured.candidateAfter?.total, 3);
   } catch { reset(); }
 }
 if (result) {
