@@ -23,6 +23,7 @@ import {
 } from './textureRepair.js';
 import { applyBackgroundAtlas, buildBackgroundAtlas, summarizeAtlas } from './multiFrameRepair.js';
 import { applyNormalEdgeBridge } from './edgeBridge.js';
+import { applyDualRingLumaFinish } from './dualRingFinish.js';
 
 const DEFAULT_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
 const REPAIR_PADDING = 14;
@@ -122,13 +123,16 @@ function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, h
     }
   }
   repaired = applyNormalEdgeBridge(repaired, paddedAlpha, 0.90);
+  const edgeBridge = repaired.edgeBridge || null;
+  repaired = applyDualRingLumaFinish(repaired, paddedAlpha, { strength: 0.56 });
   return {
     original,
     cleaned: cropRegion(repaired, inner.offsetX, inner.offsetY, inner.width, inner.height),
     repairedPadded: repaired,
     paddedAlpha,
     atlasSummary,
-    edgeBridge: repaired.edgeBridge || null
+    edgeBridge,
+    dualRingFinish: repaired.dualRingFinish || null
   };
 }
 
@@ -141,7 +145,14 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
   const history = frames.slice(0, index).map((item) => cropImageData(item.imageData, expanded)).slice(-MAX_ATLAS_HISTORY);
   const inner = { offsetX: expanded.offsetX, offsetY: expanded.offsetY, width: detection.position.width, height: detection.position.height };
   const repaired = repairPaddedRegion(padded, inner, detection.alphaMap, detection.alphaGain ?? 1, edgePolish, history, false);
-  return { timestamp: frame.timestamp, original: repaired.original, cleaned: repaired.cleaned, atlas: repaired.atlasSummary, edgeBridge: repaired.edgeBridge };
+  return {
+    timestamp: frame.timestamp,
+    original: repaired.original,
+    cleaned: repaired.cleaned,
+    atlas: repaired.atlasSummary,
+    edgeBridge: repaired.edgeBridge,
+    dualRingFinish: repaired.dualRingFinish
+  };
 }
 
 export async function inspectVideo(file, options = {}) {
@@ -259,6 +270,7 @@ export async function cleanVideo(file, options = {}) {
   const audio = await prepareAudioCopy(input, output, format, metadata.firstTimestamp);
   let processedFrames = 0, skippedFrames = 0, previousGain = requestedGain, previousTemporal = null, history = [];
   let atlasFrames = 0, atlasDonorsPeak = 0, bridgeFrames = 0, bridgePixelsPeak = 0;
+  let dualRingFrames = 0, dualRingPixelsPeak = 0, dualRingImprovementSum = 0;
   const lowGate = Number.isFinite(options.lowGate) ? options.lowGate : 0.025;
   const fallbackDuration = 1 / Math.max(1, metadata.frameRate);
   try {
@@ -284,6 +296,11 @@ export async function cleanVideo(file, options = {}) {
           let processed = repaired.cleaned;
           if (repaired.atlasSummary?.donorCount >= 3) { atlasFrames++; atlasDonorsPeak = Math.max(atlasDonorsPeak, repaired.atlasSummary.donorCount); }
           if (repaired.edgeBridge?.bridgedPixels > 0) { bridgeFrames++; bridgePixelsPeak = Math.max(bridgePixelsPeak, repaired.edgeBridge.bridgedPixels); }
+          if (repaired.dualRingFinish?.correctedPixels > 0) {
+            dualRingFrames++;
+            dualRingPixelsPeak = Math.max(dualRingPixelsPeak, repaired.dualRingFinish.correctedPixels);
+            dualRingImprovementSum += repaired.dualRingFinish.improvement || 0;
+          }
           if (options.temporalStabilize !== false) processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.45);
           const finalPadded = pasteRegion(repaired.repairedPadded, processed, inner.offsetX, inner.offsetY);
           ctx.putImageData(toImageDataLike(finalPadded), expanded.x, expanded.y);
@@ -306,11 +323,14 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.17', position, alphaGain: previousGain, processedFrames, skippedFrames, audio: audioResult,
+        version: '1.0.20', position, alphaGain: previousGain, processedFrames, skippedFrames, audio: audioResult,
         repair: {
           padding: REPAIR_PADDING, paddedTexture: true, multiFrameAtlas: options.temporalStabilize !== false,
-          hybridCoreRing: true, normalEdgeBridge: true, subpixelAlphaRegistration: true,
-          bridgeFrames, bridgePixelsPeak, atlasFrames, atlasDonorsPeak, historyLimit: MAX_ATLAS_HISTORY
+          hybridCoreRing: true, normalEdgeBridge: true, microEdgeFinish: true, quadrantChromaFinish: true,
+          dualRingLumaFinish: true, subpixelAlphaRegistration: true,
+          bridgeFrames, bridgePixelsPeak, atlasFrames, atlasDonorsPeak, historyLimit: MAX_ATLAS_HISTORY,
+          dualRingFrames, dualRingPixelsPeak,
+          meanDualRingImprovement: dualRingFrames ? dualRingImprovementSum / dualRingFrames : 0
         },
         detection: analysis?.detection || (detectedRegion ? { detected: true, position } : null)
       }
