@@ -2,6 +2,7 @@ import { buildHybridRepairMask } from './textureRepair.js';
 import { analyzeSmoothBackground, applySmoothBackgroundReconstruction } from './smoothBackground.js';
 import { stabilizeSmoothBackgroundMode } from './adaptiveFinish.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
+import { applyStructuredResidualRingSuppression } from './structuredRingSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -281,6 +282,8 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     ? { mode: 'structured', rawMode: 'structured', held: false, switched: false, hardUnsafe: false, temporal: { enabled: false, mode: 'structured', rawMode: 'structured', switches: 0, heldFrames: 0 } }
     : stabilizeSmoothBackgroundMode(smoothAnalysis, options.smoothModeOptions || {});
   let smoothBackground = { applied: false, ...smoothAnalysis, mode: decision.mode, rawMode: decision.rawMode, temporal: decision.temporal, held: decision.held, switched: decision.switched, hardUnsafe: decision.hardUnsafe };
+  let structuredRing = { enabled: options.structuredRing !== false, attempted: false, accepted: false };
+
   if (decision.mode === 'smooth-rebuild' && smoothAnalysis?.coefficients) {
     const smoothCandidate = applySmoothBackgroundReconstruction(selected, alphaMap, { ...smoothAnalysis, safe: true }, {
       strength: options.smoothStrength ?? 0.995,
@@ -289,13 +292,29 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     });
     selected = { width: smoothCandidate.width, height: smoothCandidate.height, data: smoothCandidate.data };
     smoothBackground = { ...smoothCandidate.smoothBackground, mode: 'smooth-rebuild', rawMode: decision.rawMode, temporal: decision.temporal, held: decision.held, switched: decision.switched, hardUnsafe: decision.hardUnsafe };
+  } else if (decision.mode === 'structured' && options.structuredRing !== false) {
+    const structuredCandidate = applyStructuredResidualRingSuppression(selected, alphaMap, {
+      enabled: true,
+      strength: options.structuredRingStrength ?? 0.50,
+      totalThreshold: options.structuredRingTotalThreshold ?? 0.80,
+      lumaThreshold: options.structuredRingLumaThreshold ?? 1.35
+    });
+    selected = { width: structuredCandidate.width, height: structuredCandidate.height, data: structuredCandidate.data };
+    structuredRing = structuredCandidate.structuredRing || structuredRing;
   }
 
   const after = measureDualRingResidual(selected, alphaMap);
   const improvement = before.total > 1e-6 ? (before.total - after.total) / before.total : 0;
   const finalAfter = measurePostCleanupResidual(selected, alphaMap);
   const finalImprovement = finalBefore.total > 1e-6 ? clamp((finalBefore.total - finalAfter.total) / finalBefore.total, -1, 1) : 0;
-  const finalCleanup = { before: finalBefore, after: finalAfter, improvement: finalImprovement, source: smoothBackground.applied ? 'post-smooth-rebuild' : 'post-structured-finish' };
+  const finalCleanup = {
+    before: finalBefore,
+    after: finalAfter,
+    improvement: finalImprovement,
+    source: smoothBackground.applied
+      ? 'post-smooth-rebuild'
+      : (structuredRing.accepted ? 'post-structured-ring-suppression' : 'post-structured-finish')
+  };
   return {
     width: selected.width,
     height: selected.height,
@@ -309,9 +328,11 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
       meanAbsLumaDelta: primary.correctedPixels ? primary.meanAbsLumaDelta : 0,
       secondPass,
       smoothBackground,
+      structuredRing,
       finalCleanup
     },
     smoothBackground,
+    structuredRing,
     finalCleanup
   };
 }
