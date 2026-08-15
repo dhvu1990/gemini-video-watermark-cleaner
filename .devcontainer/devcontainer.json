@@ -7,10 +7,10 @@
     "5173": {
       "label": "Gemini Video Watermark Cleaner",
       "onAutoForward": "notify",
-      "protocol": "https"
+      "protocol": "http"
     }
   },
   "postCreateCommand": "npm install --no-audit --no-fund && npm run setup:alpha",
-  "postStartCommand": "nohup npm run dev -- --host 0.0.0.0 --port 5173 > /tmp/gemini-vite.log 2>&1 &",
+  "postStartCommand": "bash .devcontainer/start-vite.sh",
   "remoteUser": "node"
 }
