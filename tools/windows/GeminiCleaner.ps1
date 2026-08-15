@@ -3,7 +3,9 @@ param(
   [string]$Repository = 'dhvu1990/gemini-video-watermark-cleaner',
   [int]$Port = 5173,
   [int]$StartTimeoutSeconds = 180,
-  [int]$PortTimeoutSeconds = 90
+  [int]$PortTimeoutSeconds = 120,
+  [int]$StablePortChecks = 3,
+  [int]$ProxyWarmupSeconds = 8
 )
 
 Set-StrictMode -Version Latest
@@ -62,6 +64,8 @@ function Wait-CodespaceAvailable([string]$Name) {
 
 function Get-PrivatePortUrl([string]$Name) {
   $deadline = (Get-Date).AddSeconds($PortTimeoutSeconds)
+  $stableCount = 0
+  $lastUrl = $null
 
   do {
     $ports = Invoke-GhJson @(
@@ -82,20 +86,38 @@ function Get-PrivatePortUrl([string]$Name) {
           ("{0}:private" -f $Port),
           '--codespace', $Name
         ) | Out-Null
-        Start-Sleep -Seconds 2
+        $stableCount = 0
+        $lastUrl = $null
+        Start-Sleep -Seconds 3
         continue
       }
 
-      if (-not [string]::IsNullOrWhiteSpace([string]$entry.browseUrl)) {
-        return [string]$entry.browseUrl
+      $currentUrl = [string]$entry.browseUrl
+      if (-not [string]::IsNullOrWhiteSpace($currentUrl)) {
+        if ($currentUrl -eq $lastUrl) {
+          $stableCount++
+        } else {
+          $lastUrl = $currentUrl
+          $stableCount = 1
+        }
+
+        Write-Step "Private port $Port detected ($stableCount/$StablePortChecks stable checks)."
+        if ($stableCount -ge $StablePortChecks) {
+          Write-Step "Waiting $ProxyWarmupSeconds seconds for the GitHub forwarded-port proxy to finish warming up..."
+          Start-Sleep -Seconds $ProxyWarmupSeconds
+          return $currentUrl
+        }
       }
+    } else {
+      $stableCount = 0
+      $lastUrl = $null
     }
 
     Write-Step "Waiting for private forwarded port $Port..."
     Start-Sleep -Seconds 3
   } while ((Get-Date) -lt $deadline)
 
-  throw "Private forwarded port $Port did not become available within $PortTimeoutSeconds seconds."
+  throw "Private forwarded port $Port did not become stable within $PortTimeoutSeconds seconds."
 }
 
 try {
@@ -105,7 +127,7 @@ try {
 
   & gh auth status --hostname github.com *> $null
   if ($LASTEXITCODE -ne 0) {
-    throw 'GitHub CLI is not authenticated. Run: gh auth login --hostname github.com --web'
+    throw 'GitHub CLI is not authenticated. Run: gh auth login --hostname github.com --web --clipboard'
   }
 
   $codespace = Get-TargetCodespace
