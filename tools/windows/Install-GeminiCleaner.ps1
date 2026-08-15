@@ -41,15 +41,20 @@ function Ensure-Gh {
 
 function Ensure-GhAuth {
   & gh auth status --hostname github.com *> $null
-  if ($LASTEXITCODE -eq 0) {
-    Write-Step 'GitHub CLI authentication is ready.'
-    return
+  if ($LASTEXITCODE -ne 0) {
+    Write-Step 'Opening GitHub browser authentication...'
+    & gh auth login --hostname github.com --git-protocol https --web --scopes codespace,repo
+    if ($LASTEXITCODE -ne 0) {
+      throw 'GitHub CLI authentication did not complete successfully.'
+    }
+  } else {
+    Write-Step 'GitHub CLI authentication detected.'
   }
 
-  Write-Step 'Opening GitHub browser authentication...'
-  & gh auth login --hostname github.com --git-protocol https --web --scopes codespace,repo
+  Write-Step 'Ensuring Codespaces permission is granted to GitHub CLI...'
+  & gh auth refresh --hostname github.com --scopes codespace
   if ($LASTEXITCODE -ne 0) {
-    throw 'GitHub CLI authentication did not complete successfully.'
+    throw 'Could not grant the GitHub CLI codespace scope.'
   }
 }
 
