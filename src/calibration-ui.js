@@ -24,6 +24,15 @@ function format(value, digits = 3) {
   return Number.isFinite(value) ? Number(value).toFixed(digits) : '-';
 }
 
+function deriveImprovement(calibration, finalCleanup) {
+  const reported = finalCleanup?.improvement;
+  if (Number.isFinite(reported) && Math.abs(reported) > 1e-6) return reported;
+  const before = Number(calibration?.residualScore);
+  const after = Number(finalCleanup?.after?.total);
+  if (!Number.isFinite(before) || before <= 1e-6 || !Number.isFinite(after)) return null;
+  return Math.max(-1, Math.min(1, (before - after) / before));
+}
+
 function render() {
   if (!result) return;
   try {
@@ -47,8 +56,9 @@ function render() {
     if (fields.finalTotal) fields.finalTotal.value = format(after.total, 3);
     if (fields.finalLuma) fields.finalLuma.value = format(after.luma, 3);
     if (fields.finalChroma) fields.finalChroma.value = format(after.chroma, 3);
-    if (fields.finalImprovement) fields.finalImprovement.value = Number.isFinite(finalCleanup?.improvement)
-      ? `${(finalCleanup.improvement * 100).toFixed(1)}%`
+    const improvement = deriveImprovement(calibration, finalCleanup);
+    if (fields.finalImprovement) fields.finalImprovement.value = Number.isFinite(improvement)
+      ? `${(improvement * 100).toFixed(1)}%`
       : '-';
   } catch {
     reset();
