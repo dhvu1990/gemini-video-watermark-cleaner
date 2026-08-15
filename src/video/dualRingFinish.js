@@ -142,11 +142,8 @@ export function measureDualRingResidual(image, alphaMap) {
   return { total, inner, outer, corner };
 }
 
-export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
-  const strength = clamp(Number(options.strength ?? 0.56), 0, 1);
-  if (strength <= 0 || alphaMap.length !== image.width * image.height) return image;
+function applyPrimaryDualRingPass(image, alphaMap, strength) {
   const { width, height, data } = image;
-  const before = measureDualRingResidual(image, alphaMap);
   const masks = buildDualRingMask(alphaMap, width, height);
   const out = new Uint8ClampedArray(data);
   let correctedPixels = 0;
@@ -185,17 +182,142 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     }
   }
 
-  const result = { width, height, data: out };
-  const after = measureDualRingResidual(result, alphaMap);
+  return {
+    image: { width, height, data: out },
+    correctedPixels,
+    meanAbsLumaDelta: correctedPixels ? lumaDeltaSum / correctedPixels : 0
+  };
+}
+
+export function measureInnerStructureResidual(image, alphaMap) {
+  const { width, height, data } = image;
+  const hybrid = buildHybridRepairMask(alphaMap, width, height);
+  let scoreSum = 0;
+  let weightSum = 0;
+  let samples = 0;
+
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const p = y * width + x;
+      const a = alphaMap[p] || 0;
+      const core = hybrid.core[p] || 0;
+      const edge = hybrid.edge[p] || 0;
+      if (a < 0.10 || a > 0.42 || core > 0.78 || edge < 0.04) continue;
+      const ag = gradientAt(alphaMap, width, x, y);
+      if (ag.magnitude < 0.0012) continue;
+      const idx = p * 4;
+      const gx = luma([data[idx + 4], data[idx + 5], data[idx + 6]]) - luma([data[idx - 4], data[idx - 3], data[idx - 2]]);
+      const gy = luma([data[idx + width * 4], data[idx + width * 4 + 1], data[idx + width * 4 + 2]]) - luma([data[idx - width * 4], data[idx - width * 4 + 1], data[idx - width * 4 + 2]]);
+      const ig = Math.hypot(gx, gy);
+      if (ig < 1.5) continue;
+      const dot = Math.abs((gx * ag.gx + gy * ag.gy) / Math.max(1e-6, ig * ag.magnitude));
+      const shapeAligned = smoothstep(0.55, 0.92, dot);
+      const midBand = smoothstep(0.10, 0.20, a) * (1 - smoothstep(0.34, 0.46, a));
+      const weight = shapeAligned * midBand * (1 - core * 0.65);
+      scoreSum += ig * weight;
+      weightSum += weight;
+      samples++;
+    }
+  }
+
+  return { score: weightSum ? scoreSum / weightSum : 0, samples };
+}
+
+function applyInnerStructureBreaker(image, alphaMap, strength = 0.34) {
+  const safeStrength = clamp(Number(strength) || 0, 0, 0.60);
+  const { width, height, data } = image;
+  const hybrid = buildHybridRepairMask(alphaMap, width, height);
+  const out = new Uint8ClampedArray(data);
+  let correctedPixels = 0;
+  let deltaSum = 0;
+
+  for (let y = 2; y < height - 2; y++) {
+    for (let x = 2; x < width - 2; x++) {
+      const p = y * width + x;
+      const a = alphaMap[p] || 0;
+      const core = hybrid.core[p] || 0;
+      const edge = hybrid.edge[p] || 0;
+      if (a < 0.10 || a > 0.40 || core > 0.70 || edge < 0.05) continue;
+      const ag = gradientAt(alphaMap, width, x, y);
+      if (ag.magnitude < 0.0013) continue;
+      const nx = ag.gx / ag.magnitude;
+      const ny = ag.gy / ag.magnitude;
+      const prediction = predictedLuma(image, alphaMap, x, y, nx, ny);
+      if (!prediction) continue;
+      const idx = p * 4;
+      const currentY = luma([data[idx], data[idx + 1], data[idx + 2]]);
+      const residual = prediction.target - currentY;
+      const residualGate = smoothstep(2.0, 11.0, Math.abs(residual));
+      const structureGuard = smoothstep(32, 94, prediction.disagreement);
+      const midBand = smoothstep(0.10, 0.19, a) * (1 - smoothstep(0.31, 0.41, a));
+      const blend = Math.min(0.24, safeStrength * midBand * edge * residualGate * (1 - structureGuard * 0.90) * (1 - core * 0.80));
+      if (blend < 0.025) continue;
+      const yDelta = clamp(residual, -10, 10) * blend;
+      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(data[idx + c] + yDelta);
+      correctedPixels++;
+      deltaSum += Math.abs(yDelta);
+    }
+  }
+
+  return {
+    image: { width, height, data: out },
+    correctedPixels,
+    meanAbsLumaDelta: correctedPixels ? deltaSum / correctedPixels : 0
+  };
+}
+
+export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
+  const strength = clamp(Number(options.strength ?? 0.56), 0, 1);
+  if (strength <= 0 || alphaMap.length !== image.width * image.height) return image;
+  const secondPassThreshold = Number.isFinite(options.secondPassThreshold) ? options.secondPassThreshold : 1.05;
+  const before = measureDualRingResidual(image, alphaMap);
+  const primary = applyPrimaryDualRingPass(image, alphaMap, strength);
+  const primaryAfter = measureDualRingResidual(primary.image, alphaMap);
+  const structureBefore = measureInnerStructureResidual(primary.image, alphaMap);
+
+  let selected = primary.image;
+  let secondPass = {
+    attempted: false,
+    accepted: false,
+    threshold: secondPassThreshold,
+    triggerResidual: primaryAfter.total,
+    structureBefore,
+    structureAfter: structureBefore,
+    correctedPixels: 0,
+    meanAbsLumaDelta: 0
+  };
+
+  if (primaryAfter.total >= secondPassThreshold || structureBefore.score >= 4.0) {
+    secondPass.attempted = true;
+    const candidatePass = applyInnerStructureBreaker(primary.image, alphaMap, options.structureStrength ?? 0.34);
+    const candidateResidual = measureDualRingResidual(candidatePass.image, alphaMap);
+    const candidateStructure = measureInnerStructureResidual(candidatePass.image, alphaMap);
+    const residualImproved = candidateResidual.total <= primaryAfter.total * 0.995;
+    const structureImproved = candidateStructure.score <= structureBefore.score * 0.985;
+    const notMateriallyWorse = candidateResidual.total <= primaryAfter.total * 1.015;
+    if ((residualImproved || structureImproved) && notMateriallyWorse) {
+      selected = candidatePass.image;
+      secondPass.accepted = true;
+      secondPass.correctedPixels = candidatePass.correctedPixels;
+      secondPass.meanAbsLumaDelta = candidatePass.meanAbsLumaDelta;
+      secondPass.structureAfter = candidateStructure;
+    }
+  }
+
+  const after = measureDualRingResidual(selected, alphaMap);
   const improvement = before.total > 1e-6 ? (before.total - after.total) / before.total : 0;
   return {
-    ...result,
+    width: selected.width,
+    height: selected.height,
+    data: selected.data,
     dualRingFinish: {
       before,
+      primaryAfter,
       after,
       improvement,
-      correctedPixels,
-      meanAbsLumaDelta: correctedPixels ? lumaDeltaSum / correctedPixels : 0
+      correctedPixels: primary.correctedPixels + (secondPass.accepted ? secondPass.correctedPixels : 0),
+      meanAbsLumaDelta: primary.correctedPixels ? primary.meanAbsLumaDelta : 0,
+      secondPass
     }
   };
 }
