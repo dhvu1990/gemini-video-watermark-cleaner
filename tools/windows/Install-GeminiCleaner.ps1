@@ -42,8 +42,8 @@ function Ensure-Gh {
 function Ensure-GhAuth {
   & gh auth status --hostname github.com *> $null
   if ($LASTEXITCODE -ne 0) {
-    Write-Step 'Opening GitHub browser authentication...'
-    & gh auth login --hostname github.com --git-protocol https --web --scopes codespace,repo
+    Write-Step 'Opening GitHub browser authentication; the device code will be copied to your clipboard.'
+    & gh auth login --hostname github.com --git-protocol https --web --clipboard --scopes codespace,repo
     if ($LASTEXITCODE -ne 0) {
       throw 'GitHub CLI authentication did not complete successfully.'
     }

@@ -1,4 +1,4 @@
-const APP_VERSION = '1.0.29';
+const APP_VERSION = '1.0.30';
 const result = document.getElementById('detectResult');
 const fields = {
   profile: document.getElementById('calProfile'),

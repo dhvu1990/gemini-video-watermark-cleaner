@@ -28,8 +28,16 @@ test('Windows launcher requires private port 5173 and opens dynamic browseUrl', 
   assert.match(launcher, /Start-Process \$url/);
 });
 
+test('Windows launcher waits for a stable private browseUrl before opening it', () => {
+  assert.match(launcher, /\$StablePortChecks = 3/);
+  assert.match(launcher, /\$ProxyWarmupSeconds = 8/);
+  assert.match(launcher, /stable checks/);
+  assert.match(launcher, /forwarded-port proxy to finish warming up/);
+});
+
 test('installer keeps auth in GitHub CLI and creates a local desktop shortcut', () => {
   assert.match(installer, /winget install --id GitHub\.cli/);
+  assert.match(installer, /gh auth login --hostname github\.com --git-protocol https --web --clipboard/);
   assert.match(installer, /gh auth refresh --hostname github\.com --scopes codespace/);
   assert.match(installer, /LOCALAPPDATA/);
   assert.match(installer, /CreateShortcut/);
@@ -38,7 +46,7 @@ test('installer keeps auth in GitHub CLI and creates a local desktop shortcut', 
   assert.match(cmd, /ExecutionPolicy Bypass/);
 });
 
-test('visible runtime badge is synchronized to v1.0.29', () => {
-  assert.match(ui, /const APP_VERSION = '1\.0\.29'/);
+test('visible runtime badge is synchronized to v1.0.30', () => {
+  assert.match(ui, /const APP_VERSION = '1\.0\.30'/);
   assert.match(ui, /firstBadge\.textContent = `v\$\{APP_VERSION\}`/);
 });
