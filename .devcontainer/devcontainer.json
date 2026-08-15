@@ -1,0 +1,16 @@
+{
+  "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
+  "name": "Gemini Video Watermark Cleaner",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:1-22-bookworm",
+  "forwardPorts": [5173],
+  "portsAttributes": {
+    "5173": {
+      "label": "Gemini Video Watermark Cleaner",
+      "onAutoForward": "notify",
+      "protocol": "https"
+    }
+  },
+  "postCreateCommand": "npm install --no-audit --no-fund && npm run setup:alpha",
+  "postStartCommand": "nohup npm run dev -- --host 0.0.0.0 --port 5173 > /tmp/gemini-vite.log 2>&1 &",
+  "remoteUser": "node"
+}
