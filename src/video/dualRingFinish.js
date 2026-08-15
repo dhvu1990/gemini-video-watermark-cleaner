@@ -3,6 +3,7 @@ import { analyzeSmoothBackground, applySmoothBackgroundReconstruction } from './
 import { stabilizeSmoothBackgroundMode } from './adaptiveFinish.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
 import { applyStructuredResidualRingSuppression } from './structuredRingSuppress.js';
+import { applySafeEmptyZoneHardSuppression } from './emptyZoneHardSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -283,6 +284,7 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     : stabilizeSmoothBackgroundMode(smoothAnalysis, options.smoothModeOptions || {});
   let smoothBackground = { applied: false, ...smoothAnalysis, mode: decision.mode, rawMode: decision.rawMode, temporal: decision.temporal, held: decision.held, switched: decision.switched, hardUnsafe: decision.hardUnsafe };
   let structuredRing = { enabled: options.structuredRing !== false, attempted: false, accepted: false };
+  let emptyZoneHard = { enabled: options.emptyZoneHard !== false, eligible: false, attempted: false, accepted: false };
 
   if (decision.mode === 'smooth-rebuild' && smoothAnalysis?.coefficients) {
     const smoothCandidate = applySmoothBackgroundReconstruction(selected, alphaMap, { ...smoothAnalysis, safe: true }, {
@@ -292,6 +294,24 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     });
     selected = { width: smoothCandidate.width, height: smoothCandidate.height, data: smoothCandidate.data };
     smoothBackground = { ...smoothCandidate.smoothBackground, mode: 'smooth-rebuild', rawMode: decision.rawMode, temporal: decision.temporal, held: decision.held, switched: decision.switched, hardUnsafe: decision.hardUnsafe };
+
+    if (options.emptyZoneHard !== false) {
+      const hardCandidate = applySafeEmptyZoneHardSuppression(selected, alphaMap, smoothAnalysis, {
+        enabled: true,
+        ...(options.emptyZoneHardOptions || {})
+      });
+      emptyZoneHard = hardCandidate.emptyZoneHard || emptyZoneHard;
+      if (emptyZoneHard.accepted) {
+        selected = { width: hardCandidate.width, height: hardCandidate.height, data: hardCandidate.data };
+        smoothBackground = {
+          ...smoothBackground,
+          mode: 'empty-hard-rebuild',
+          emptyZoneHard
+        };
+      } else {
+        smoothBackground = { ...smoothBackground, emptyZoneHard };
+      }
+    }
   } else if (decision.mode === 'structured' && options.structuredRing !== false) {
     const structuredCandidate = applyStructuredResidualRingSuppression(selected, alphaMap, {
       enabled: true,
@@ -301,6 +321,7 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     });
     selected = { width: structuredCandidate.width, height: structuredCandidate.height, data: structuredCandidate.data };
     structuredRing = structuredCandidate.structuredRing || structuredRing;
+    smoothBackground = { ...smoothBackground, structuredRing };
   }
 
   const after = measureDualRingResidual(selected, alphaMap);
@@ -311,10 +332,13 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
     before: finalBefore,
     after: finalAfter,
     improvement: finalImprovement,
-    source: smoothBackground.applied
-      ? 'post-smooth-rebuild'
-      : (structuredRing.accepted ? 'post-structured-ring-suppression' : 'post-structured-finish')
+    source: emptyZoneHard.accepted
+      ? 'post-empty-zone-hard-suppression'
+      : (smoothBackground.applied
+        ? 'post-smooth-rebuild'
+        : (structuredRing.accepted ? 'post-structured-ring-suppression' : 'post-structured-finish'))
   };
+  smoothBackground = { ...smoothBackground, emptyZoneHard, structuredRing };
   return {
     width: selected.width,
     height: selected.height,
@@ -329,10 +353,12 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
       secondPass,
       smoothBackground,
       structuredRing,
+      emptyZoneHard,
       finalCleanup
     },
     smoothBackground,
     structuredRing,
+    emptyZoneHard,
     finalCleanup
   };
 }
