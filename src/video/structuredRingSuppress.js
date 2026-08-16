@@ -1,5 +1,6 @@
 import { buildHybridRepairMask } from './textureRepair.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
+import { applyStructuredConsensusRepair } from './structuredConsensusRepair.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -185,22 +186,51 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   if (options.enabled === false || alphaMap.length !== image.width * image.height) {
     return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredRing: { enabled: false, attempted: false, accepted: false } };
   }
-  const before = measurePostCleanupResidual(image, alphaMap);
-  const alignedBefore = measureStructuredRingResidual(image, alphaMap);
+
+  const consensusResult = options.consensus === false
+    ? { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredConsensus: { enabled: false, attempted: false, accepted: false } }
+    : applyStructuredConsensusRepair(image, alphaMap, { enabled: true, ...(options.consensusOptions || {}) });
+  const consensus = consensusResult.structuredConsensus || { enabled: true, attempted: true, accepted: false };
+  const working = consensus.accepted
+    ? { width: consensusResult.width, height: consensusResult.height, data: consensusResult.data }
+    : image;
+
+  const before = measurePostCleanupResidual(working, alphaMap);
+  const alignedBefore = measureStructuredRingResidual(working, alphaMap);
   const totalThreshold = Number.isFinite(options.totalThreshold) ? options.totalThreshold : 0.80;
   const lumaThreshold = Number.isFinite(options.lumaThreshold) ? options.lumaThreshold : 1.35;
   const shouldAttempt = before.total >= totalThreshold || before.luma >= lumaThreshold || alignedBefore.score >= 1.40;
   if (!shouldAttempt) {
-    return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredRing: { enabled: true, attempted: false, accepted: false, before, after: before, alignedBefore, alignedAfter: alignedBefore, improvement: 0, correctedPixels: 0, salvageAttempted: false, salvageAccepted: false } };
+    return {
+      width: working.width,
+      height: working.height,
+      data: working === image ? new Uint8ClampedArray(image.data) : working.data,
+      structuredRing: {
+        enabled: true,
+        attempted: false,
+        accepted: consensus.accepted,
+        acceptedMode: consensus.accepted ? 'consensus' : 'none',
+        before,
+        after: before,
+        alignedBefore,
+        alignedAfter: alignedBefore,
+        improvement: 0,
+        correctedPixels: 0,
+        salvageAttempted: false,
+        salvageAccepted: false,
+        consensus
+      }
+    };
   }
+
   const primaryStrength = options.strength ?? 0.50;
-  const pass = applyStructuredRingPass(image, alphaMap, primaryStrength);
+  const pass = applyStructuredRingPass(working, alphaMap, primaryStrength);
   const after = measurePostCleanupResidual(pass.image, alphaMap);
   const alignedAfter = measureStructuredRingResidual(pass.image, alphaMap);
   const totalImprovement = before.total > 1e-6 ? (before.total - after.total) / before.total : 0;
   const alignedImprovement = alignedBefore.score > 1e-6 ? (alignedBefore.score - alignedAfter.score) / alignedBefore.score : 0;
   const accepted = pass.correctedPixels > 0 && (totalImprovement >= 0.004 || alignedImprovement >= 0.015) && after.total <= before.total * 1.005 && after.luma <= before.luma * 1.01;
-  let selected = accepted ? pass.image : image;
+  let selected = accepted ? pass.image : working;
   let finalAfter = accepted ? after : before;
   let finalAlignedAfter = accepted ? alignedAfter : alignedBefore;
   let finalImprovement = accepted ? totalImprovement : 0;
@@ -219,7 +249,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   if (salvageEnabled && nearMiss) {
     salvageAttempted = true;
     const salvageStrength = Math.max(0.08, Math.min(0.26, Number(primaryStrength) * (options.salvageStrengthScale ?? 0.35)));
-    const salvagePass = applyStructuredRingPass(image, alphaMap, salvageStrength);
+    const salvagePass = applyStructuredRingPass(working, alphaMap, salvageStrength);
     salvageCandidateAfter = measurePostCleanupResidual(salvagePass.image, alphaMap);
     salvageCandidateAlignedAfter = measureStructuredRingResidual(salvagePass.image, alphaMap);
     salvageCandidatePixels = salvagePass.correctedPixels;
@@ -227,13 +257,48 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     const salvageAlignedImprovement = alignedBefore.score > 1e-6 ? (alignedBefore.score - salvageCandidateAlignedAfter.score) / alignedBefore.score : 0;
     const salvageGood = salvagePass.correctedPixels > 0 && salvageCandidateAfter.total <= before.total * 0.998 && salvageCandidateAfter.luma <= before.luma * 1.002 && salvageCandidateAfter.chroma <= before.chroma * 1.01 && salvageCandidateAlignedAfter.score <= alignedBefore.score * 1.003 && (salvageImprovement >= 0.002 || salvageAlignedImprovement >= 0.008);
     if (salvageGood) {
-      salvageAccepted = true; selected = salvagePass.image; finalAfter = salvageCandidateAfter; finalAlignedAfter = salvageCandidateAlignedAfter; finalImprovement = salvageImprovement; finalAlignedImprovement = salvageAlignedImprovement; finalCorrectedPixels = salvagePass.correctedPixels; finalMeanBlend = salvagePass.meanBlend; finalMeanAbsLumaDelta = salvagePass.meanAbsLumaDelta;
+      salvageAccepted = true;
+      selected = salvagePass.image;
+      finalAfter = salvageCandidateAfter;
+      finalAlignedAfter = salvageCandidateAlignedAfter;
+      finalImprovement = salvageImprovement;
+      finalAlignedImprovement = salvageAlignedImprovement;
+      finalCorrectedPixels = salvagePass.correctedPixels;
+      finalMeanBlend = salvagePass.meanBlend;
+      finalMeanAbsLumaDelta = salvagePass.meanAbsLumaDelta;
     }
   }
+
+  const ringAccepted = accepted || salvageAccepted;
   return {
-    width: selected.width, height: selected.height, data: selected === image ? new Uint8ClampedArray(image.data) : selected.data,
+    width: selected.width,
+    height: selected.height,
+    data: selected === image ? new Uint8ClampedArray(image.data) : selected.data,
     structuredRing: {
-      enabled: true, attempted: true, accepted: accepted || salvageAccepted, acceptedMode: accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : 'none'), before, after: finalAfter, candidateAfter: after, alignedBefore, alignedAfter: finalAlignedAfter, candidateAlignedAfter: alignedAfter, improvement: finalImprovement, alignedImprovement: finalAlignedImprovement, correctedPixels: finalCorrectedPixels, candidatePixels: pass.correctedPixels, meanBlend: finalMeanBlend, meanAbsLumaDelta: finalMeanAbsLumaDelta, salvageAttempted, salvageAccepted, salvageCandidateAfter, salvageCandidateAlignedAfter, salvageCandidatePixels, salvageNearMissRatio: nearMissRatio
+      enabled: true,
+      attempted: true,
+      accepted: ringAccepted || consensus.accepted,
+      ringAccepted,
+      acceptedMode: accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')),
+      before,
+      after: finalAfter,
+      candidateAfter: after,
+      alignedBefore,
+      alignedAfter: finalAlignedAfter,
+      candidateAlignedAfter: alignedAfter,
+      improvement: finalImprovement,
+      alignedImprovement: finalAlignedImprovement,
+      correctedPixels: finalCorrectedPixels,
+      candidatePixels: pass.correctedPixels,
+      meanBlend: finalMeanBlend,
+      meanAbsLumaDelta: finalMeanAbsLumaDelta,
+      salvageAttempted,
+      salvageAccepted,
+      salvageCandidateAfter,
+      salvageCandidateAlignedAfter,
+      salvageCandidatePixels,
+      salvageNearMissRatio: nearMissRatio,
+      consensus
     }
   };
 }
