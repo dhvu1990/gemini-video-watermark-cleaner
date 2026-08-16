@@ -1,8 +1,8 @@
 # Private GitHub Codespaces Runtime
 
-This repository can run as a private browser tool in GitHub Codespaces without a separate backend.
+This repository runs as a private browser tool in GitHub Codespaces without a separate backend.
 
-## Target architecture
+## Primary runtime
 
 ```text
 Private GitHub repository
@@ -13,6 +13,20 @@ Private GitHub repository
   -> video processing remains local in that browser
 ```
 
+GitHub Pages is not the primary runtime for this private project.
+
+## Current usage
+
+The application is opened through the Codespaces forwarded URL for port `5173`, for example:
+
+```text
+https://<codespace-name>-5173.app.github.dev/
+```
+
+A concrete `*.app.github.dev` hostname is temporary and can change when a Codespace is recreated. Do not hard-code it into application source or documentation as a permanent production hostname.
+
+The Windows launcher discovers the current Codespace and live `browseUrl` dynamically.
+
 ## What the dev container does
 
 `.devcontainer/devcontainer.json` uses Node.js 22 and automatically:
@@ -22,37 +36,21 @@ Private GitHub repository
 3. forwards port `5173`,
 4. starts Vite on `0.0.0.0:5173` whenever the Codespace starts.
 
-No public port visibility is configured in the repository. Keep the forwarded port visibility set to **Private** in the Codespaces Ports panel.
+Keep the forwarded port visibility set to **Private** in the Codespaces Ports panel.
 
-## First test while the repository is still public
+## Normal verification after a merge to main
 
-1. Open the repository on GitHub.
-2. Select **Code -> Codespaces -> Create codespace on main** after v1.0.27 is merged.
-3. Wait for the post-create setup to finish.
-4. Open the **Ports** panel.
-5. Verify port `5173` exists and visibility is **Private**.
-6. Open the forwarded URL.
-7. Confirm the app loads and select a local test video.
-8. Re-test both baseline samples:
-   - USB-C / empty background path,
-   - keyboard / structured background path.
-9. Confirm video bytes are still selected from the browser and the app remains local-first.
-
-## Before changing the repository to Private
-
-- Confirm CI is green on v1.0.27.
-- Confirm the Codespace starts automatically.
-- Confirm port `5173` is Private.
-- Confirm both regression videos behave like v1.0.26.
-- Save the milestone notes/config to the Google Drive project archive.
-
-## After changing the repository to Private
-
-Create or rebuild the Codespace from the private repository and repeat the checks above. The GitHub Pages production site is no longer the target runtime for the private-only deployment.
+1. Update/rebuild the Codespace from `main` if required.
+2. Confirm Vite is running on port `5173`.
+3. Confirm the port visibility is **Private**.
+4. Open the current forwarded `browseUrl`.
+5. Confirm the app version/runtime loads correctly.
+6. Test a local Gemini/Veo video in the browser.
+7. Review `ZOOMED ORIGINAL`, `ZOOMED CLEANED`, and the exported result before accepting cleanup quality.
 
 ## Manual commands
 
-If automatic startup is ever unavailable:
+If automatic startup is unavailable:
 
 ```bash
 npm install --no-audit --no-fund
@@ -94,4 +92,4 @@ Then restart manually with the Vite command above.
 
 ## Security rule
 
-Do not change forwarded port visibility to Public. The private Codespaces URL is the intended personal runtime after repository privatization.
+Do not change forwarded port visibility to Public. The private Codespaces URL on port `5173` is the intended personal runtime.
