@@ -100,16 +100,21 @@ test('hard shape-aligned residual may run second pass but never accepts a worse 
     return [clean.data[i] - skeleton, clean.data[i + 1] - skeleton, clean.data[i + 2] - skeleton];
   });
 
+  // Keep this regression scoped to the selective second-pass subsystem.
+  // v1.0.31+ may run independent structured-consensus/ring cleanup afterwards,
+  // which has its own acceptance tests and should not change this test's metric.
   const primaryOnly = applyDualRingLumaFinish(hard, alpha, {
     strength: 0.56,
     secondPass: false,
-    smoothBackground: false
+    smoothBackground: false,
+    structuredRing: false
   });
   const adaptive = applyDualRingLumaFinish(hard, alpha, {
     strength: 0.56,
     secondPassThreshold: 0.20,
     structureStrength: 0.40,
-    smoothBackground: false
+    smoothBackground: false,
+    structuredRing: false
   });
   const primaryResidual = measureDualRingResidual(primaryOnly, alpha);
   const adaptiveResidual = measureDualRingResidual(adaptive, alpha);
