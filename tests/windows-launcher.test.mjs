@@ -8,6 +8,7 @@ const cmd = fs.readFileSync(new URL('../tools/windows/GeminiCleaner.cmd', import
 const ui = fs.readFileSync(new URL('../src/calibration-ui.js', import.meta.url), 'utf8');
 const worker = fs.readFileSync(new URL('../src/video/worker.js', import.meta.url), 'utf8');
 const version = fs.readFileSync(new URL('../src/version.js', import.meta.url), 'utf8');
+const packageJson = JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 test('Windows launcher discovers Codespace by repository instead of hard-coding one URL', () => {
   assert.match(launcher, /dhvu1990\/gemini-video-watermark-cleaner/);
@@ -49,7 +50,8 @@ test('installer keeps auth in GitHub CLI and creates a local desktop shortcut', 
 });
 
 test('runtime version uses one shared source of truth', () => {
-  assert.match(version, /export const APP_VERSION = '1\.0\.42'/);
+  const escapedVersion = packageJson.version.replace(/\./g, '\\.');
+  assert.match(version, new RegExp(`export const APP_VERSION = '${escapedVersion}'`));
   assert.match(ui, /import \{ APP_VERSION \} from '\.\/version\.js'/);
   assert.match(worker, /import \{ APP_VERSION \} from '\.\.\/version\.js'/);
   assert.match(ui, /firstBadge\.textContent = `v\$\{APP_VERSION\}`/);
