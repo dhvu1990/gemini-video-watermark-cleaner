@@ -52,11 +52,12 @@ test('structured ring suppression never accepts a materially worse candidate', (
   const alpha = diamondAlpha(width, height);
   const damaged = ringDamaged(width, height, alpha);
   const before = measureStructuredRingResidual(damaged, alpha);
-  // This test isolates the ring pass. Consensus and shape-ghost cleanup have
-  // their own safety tests and may legitimately become the final accepted mode.
+  // This test intentionally isolates the ring pass. Consensus, shape-ghost and
+  // center-seam finishing are covered by their own safety/integration tests.
   const result = applyStructuredResidualRingSuppression(damaged, alpha, {
     consensus: false,
     shapeGhost: false,
+    centerSeam: false,
     totalThreshold: 0.10,
     lumaThreshold: 0.10,
     strength: 0.58
@@ -84,6 +85,7 @@ test('micro-salvage candidate is accepted only when final residual stays safer t
   const result = applyStructuredResidualRingSuppression(damaged, alpha, {
     consensus: false,
     shapeGhost: false,
+    centerSeam: false,
     totalThreshold: 0.10,
     lumaThreshold: 0.10,
     strength: 0.72,
@@ -110,6 +112,7 @@ test('low-residual structured region skips the suppression pass', () => {
   const result = applyStructuredResidualRingSuppression(clean, alpha, {
     consensus: false,
     shapeGhost: false,
+    centerSeam: false,
     totalThreshold: 999,
     lumaThreshold: 999
   });

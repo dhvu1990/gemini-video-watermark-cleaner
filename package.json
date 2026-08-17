@@ -1,9 +1,9 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.44",
+  "version": "1.0.46",
   "private": true,
   "type": "module",
-  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with guarded center-seam suppression, package-derived version consistency checks, stable deferred multi-file picker ingestion, sequential batch processing, immediate batch retry resume, texture-preserving structured cleanup, faint smooth-background micro-ghost suppression, stronger guarded dark-background ghost suppression, streak-safe directional consensus texture repair, overwrite-safe download release, adaptive smooth-background reconstruction, safe empty-zone hard suppression, temporally stable mode selection, structured directional consensus reconstruction, structured residual ring suppression with micro-salvage, subpixel alpha registration, detail-preserving restoration, dual-ring finishing and residual-aware cleanup.",
+  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with runtime-wired guarded center-seam suppression, isolated structured-ring regression coverage, package-derived version consistency checks, stable deferred multi-file picker ingestion, sequential batch processing, immediate batch retry resume, texture-preserving structured cleanup, faint smooth-background micro-ghost suppression, stronger guarded dark-background ghost suppression, streak-safe directional consensus texture repair, overwrite-safe download release, adaptive smooth-background reconstruction, safe empty-zone hard suppression, temporally stable mode selection, structured directional consensus reconstruction, structured residual ring suppression with micro-salvage, subpixel alpha registration, detail-preserving restoration, dual-ring finishing and residual-aware cleanup.",
   "scripts": {
     "setup:alpha": "node scripts/sync-alpha-assets.mjs",
     "dev": "vite",
