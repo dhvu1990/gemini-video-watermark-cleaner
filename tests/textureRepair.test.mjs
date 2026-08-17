@@ -65,6 +65,32 @@ test('padded texture repair pulls a dark edge footprint toward surrounding backg
   assert.ok(mae(repaired, damaged, coreMask) < 2.5);
 });
 
+test('directional consensus suppresses a single bright directional outlier instead of painting a streak through the repair', () => {
+  const width = 41, height = 41;
+  const alpha = hybridAlpha(width, height);
+  const cy = Math.floor(height / 2);
+  const original = image(width, height, (x, y) => {
+    const base = 120;
+    const value = y === cy ? 220 : base;
+    return [value, value, value];
+  });
+  const damaged = image(width, height, (x, y) => {
+    const p = y * width + x;
+    const a = alpha[p];
+    if (a > 0.01) return [72, 72, 72];
+    const i = p * 4;
+    return [original.data[i], original.data[i + 1], original.data[i + 2]];
+  });
+
+  const repaired = applyPaddedTextureRepair(damaged, alpha, 0.95);
+  const x = Math.floor(width / 2) + 6;
+  const p = cy * width + x;
+  const i = p * 4;
+
+  assert.ok(repaired.data[i] > damaged.data[i]);
+  assert.ok(repaired.data[i] < 178, `single-direction outlier leaked into repair: ${repaired.data[i]}`);
+});
+
 test('hybrid repair mask separates high-alpha core from edge ring', () => {
   const width = 25, height = 25;
   const alpha = hybridAlpha(width, height);
