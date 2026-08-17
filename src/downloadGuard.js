@@ -1,3 +1,5 @@
+import './batch-mount.js';
+
 export function releaseSourcePreviewForOverwrite({ previewVideo, fileInput, revoke = (url) => URL.revokeObjectURL(url) } = {}) {
   const sourceUrl = String(previewVideo?.currentSrc || previewVideo?.src || '');
   try { previewVideo?.pause?.(); } catch {}
