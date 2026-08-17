@@ -37,6 +37,23 @@ function imageGradient(image, x, y) {
   return { gx, gy, magnitude: Math.hypot(gx, gy) };
 }
 
+function localHighPass(image, x, y) {
+  if (x < 1 || y < 1 || x >= image.width - 1 || y >= image.height - 1) return 0;
+  let sum = 0;
+  let weight = 0;
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dx = -1; dx <= 1; dx++) {
+      const w = dx === 0 && dy === 0 ? 0 : (dx === 0 || dy === 0 ? 2 : 1);
+      const i = ((y + dy) * image.width + x + dx) * 4;
+      sum += luma([image.data[i], image.data[i + 1], image.data[i + 2]]) * w;
+      weight += w;
+    }
+  }
+  const idx = (y * image.width + x) * 4;
+  const center = luma([image.data[idx], image.data[idx + 1], image.data[idx + 2]]);
+  return weight ? center - sum / weight : 0;
+}
+
 function findCleanAnchor(image, alphaMap, x, y, nx, ny, sign, maxRadius = 26) {
   for (let distance = 1; distance <= maxRadius; distance++) {
     const sx = Math.round(x + nx * distance * sign);
@@ -45,7 +62,13 @@ function findCleanAnchor(image, alphaMap, x, y, nx, ny, sign, maxRadius = 26) {
     const p = sy * image.width + sx;
     if ((alphaMap[p] || 0) <= 0.006) {
       const i = p * 4;
-      return { distance, rgb: [image.data[i], image.data[i + 1], image.data[i + 2]] };
+      return {
+        distance,
+        x: sx,
+        y: sy,
+        rgb: [image.data[i], image.data[i + 1], image.data[i + 2]],
+        highPass: localHighPass(image, sx, sy)
+      };
     }
   }
   return null;
@@ -57,7 +80,10 @@ function bridgePrediction(a, b) {
   if (span <= 0) return null;
   const rgb = [0, 1, 2].map((c) => (a.rgb[c] * b.distance + b.rgb[c] * a.distance) / span);
   const disagreement = (Math.abs(a.rgb[0] - b.rgb[0]) + Math.abs(a.rgb[1] - b.rgb[1]) + Math.abs(a.rgb[2] - b.rgb[2])) / 3;
-  return { rgb, disagreement, span };
+  const texture = (a.highPass * b.distance + b.highPass * a.distance) / span;
+  const textureAgreement = 1 - smoothstep(4, 22, Math.abs(a.highPass - b.highPass));
+  const textureEnergy = Math.min(24, (Math.abs(a.highPass) + Math.abs(b.highPass)) * 0.5);
+  return { rgb, disagreement, span, texture, textureAgreement, textureEnergy };
 }
 
 function ghostSample(image, alphaMap, x, y, options = {}) {
@@ -86,6 +112,30 @@ function ghostSample(image, alphaMap, x, y, options = {}) {
   const lumaResidual = Math.abs(current[0] - wanted[0]);
   const chromaResidual = (Math.abs(current[1] - wanted[1]) + Math.abs(current[2] - wanted[2])) * 0.5;
   return { p, idx, alpha, ag, ig, alignment, target, current, wanted, lumaResidual, chromaResidual };
+}
+
+function analyzeGhostField(image, alphaMap, options = {}) {
+  let gradientSum = 0, disagreementSum = 0, textureSum = 0, count = 0;
+  for (let y = 2; y < image.height - 2; y += 2) {
+    for (let x = 2; x < image.width - 2; x += 2) {
+      const sample = ghostSample(image, alphaMap, x, y, options);
+      if (!sample) continue;
+      gradientSum += sample.ig.magnitude;
+      disagreementSum += sample.target.disagreement;
+      textureSum += sample.target.textureEnergy * sample.target.textureAgreement;
+      count++;
+    }
+  }
+  const meanGradient = count ? gradientSum / count : 0;
+  const meanAnchorDisagreement = count ? disagreementSum / count : 0;
+  const meanTextureEnergy = count ? textureSum / count : 0;
+  const smoothConfidence = count
+    ? (1 - smoothstep(3.5, 9.5, meanGradient)) * (1 - smoothstep(12, 34, meanAnchorDisagreement))
+    : 0;
+  const texturedConfidence = count
+    ? smoothstep(3.0, 11.0, meanTextureEnergy) * (1 - smoothstep(42, 82, meanAnchorDisagreement))
+    : 0;
+  return { samples: count, meanGradient, meanAnchorDisagreement, meanTextureEnergy, smoothConfidence, texturedConfidence };
 }
 
 export function measureShapeGhostResidual(image, alphaMap, options = {}) {
@@ -117,8 +167,10 @@ export function measureShapeGhostResidual(image, alphaMap, options = {}) {
 
 function applyShapeGhostPass(image, alphaMap, options = {}) {
   const strength = clamp(Number(options.strength ?? 0.52), 0, 0.78);
+  const smoothMicro = clamp(Number(options.smoothMicro ?? 0), 0, 1);
+  const textureRestore = clamp(Number(options.textureRestore ?? 0.42), 0, 0.70);
   const out = new Uint8ClampedArray(image.data);
-  let correctedPixels = 0, blendSum = 0, lumaDeltaSum = 0, darkBoostedPixels = 0;
+  let correctedPixels = 0, blendSum = 0, lumaDeltaSum = 0, darkBoostedPixels = 0, textureRestoredPixels = 0, microGhostPixels = 0;
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
@@ -127,17 +179,26 @@ function applyShapeGhostPass(image, alphaMap, options = {}) {
       if (sample.target.disagreement > (options.maxAnchorDisagreement ?? 76)) continue;
 
       const alignmentGate = smoothstep(0.38, 0.88, sample.alignment);
-      const residualGate = smoothstep(1.2, 10.5, sample.lumaResidual + sample.chromaResidual * 0.22);
+      const standardResidual = smoothstep(1.2, 10.5, sample.lumaResidual + sample.chromaResidual * 0.22);
+      const microResidual = smoothstep(0.28, 2.8, sample.lumaResidual + sample.chromaResidual * 0.18) * (1 - smoothstep(5.0, 9.0, sample.lumaResidual));
+      const residualGate = Math.max(standardResidual, microResidual * smoothMicro * 0.72);
       const anchorGate = 1 - smoothstep(30, 78, sample.target.disagreement);
       const spanGate = 1 - smoothstep(26, 46, sample.target.span);
       const bodyBand = smoothstep(0.085, 0.20, sample.alpha) * (1 - smoothstep(0.54, 0.70, sample.alpha));
       const sceneStructureGuard = smoothstep(18, 58, sample.ig.magnitude) * (1 - alignmentGate * 0.86);
       const darkConfidence = (1 - smoothstep(48, 132, sample.current[0])) * alignmentGate * anchorGate;
       const darkBoost = 1 + darkConfidence * 0.24;
-      const blend = Math.min(0.46, strength * darkBoost * bodyBand * residualGate * anchorGate * spanGate * (0.30 + alignmentGate * 0.70) * (1 - sceneStructureGuard * 0.88));
-      if (blend < 0.028) continue;
+      const microBoost = 1 + smoothMicro * microResidual * anchorGate * 0.20;
+      const blend = Math.min(0.46, strength * darkBoost * microBoost * bodyBand * residualGate * anchorGate * spanGate * (0.30 + alignmentGate * 0.70) * (1 - sceneStructureGuard * 0.88));
+      if (blend < 0.024) continue;
 
-      const yDelta = clamp(sample.wanted[0] - sample.current[0], -18, 18) * blend;
+      const textureGate = smoothstep(2.5, 12.0, sample.target.textureEnergy)
+        * sample.target.textureAgreement
+        * (1 - smoothstep(0.62, 0.94, sample.alignment))
+        * anchorGate;
+      const textureDelta = clamp(sample.target.texture, -10, 10) * textureRestore * textureGate;
+      const wantedY = sample.wanted[0] + textureDelta;
+      const yDelta = clamp(wantedY - sample.current[0], -18, 18) * blend;
       const chromaBlend = Math.min(0.18, blend * 0.32);
       const cb = sample.current[1] + clamp(sample.wanted[1] - sample.current[1], -15, 15) * chromaBlend;
       const cr = sample.current[2] + clamp(sample.wanted[2] - sample.current[2], -15, 15) * chromaBlend;
@@ -145,6 +206,8 @@ function applyShapeGhostPass(image, alphaMap, options = {}) {
       out[sample.idx] = rgb[0]; out[sample.idx + 1] = rgb[1]; out[sample.idx + 2] = rgb[2];
       correctedPixels++;
       if (darkConfidence > 0.20) darkBoostedPixels++;
+      if (Math.abs(textureDelta) > 0.35) textureRestoredPixels++;
+      if (smoothMicro > 0.20 && microResidual > standardResidual) microGhostPixels++;
       blendSum += blend;
       lumaDeltaSum += Math.abs(yDelta);
     }
@@ -154,6 +217,8 @@ function applyShapeGhostPass(image, alphaMap, options = {}) {
     image: { width: image.width, height: image.height, data: out },
     correctedPixels,
     darkBoostedPixels,
+    textureRestoredPixels,
+    microGhostPixels,
     meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
     meanAbsLumaDelta: correctedPixels ? lumaDeltaSum / correctedPixels : 0
   };
@@ -165,22 +230,31 @@ export function applyShapeGhostSuppression(image, alphaMap, options = {}) {
   }
 
   const before = measureShapeGhostResidual(image, alphaMap, options);
+  const field = analyzeGhostField(image, alphaMap, options);
   const outerBefore = measurePostCleanupResidual(image, alphaMap);
   const minScore = Number.isFinite(options.minScore) ? options.minScore : 1.35;
-  if (before.samples < (options.minSamples ?? 8) || before.score < minScore) {
+  const microEligible = field.samples >= 8 && field.smoothConfidence >= 0.52 && before.score >= (options.microMinScore ?? 0.42);
+  if (before.samples < (options.minSamples ?? 8) || (before.score < minScore && !microEligible)) {
     return {
       width: image.width, height: image.height, data: new Uint8ClampedArray(image.data),
-      shapeGhost: { enabled: true, attempted: false, accepted: false, before, after: before, outerBefore, outerAfter: outerBefore, improvement: 0, correctedPixels: 0 }
+      shapeGhost: { enabled: true, attempted: false, accepted: false, before, after: before, outerBefore, outerAfter: outerBefore, improvement: 0, correctedPixels: 0, field, microEligible }
     };
   }
 
-  const pass = applyShapeGhostPass(image, alphaMap, options);
+  const passOptions = {
+    ...options,
+    smoothMicro: microEligible ? field.smoothConfidence : 0,
+    textureRestore: (options.textureRestore ?? 0.42) * (0.45 + field.texturedConfidence * 0.55)
+  };
+  const pass = applyShapeGhostPass(image, alphaMap, passOptions);
   const candidateAfter = measureShapeGhostResidual(pass.image, alphaMap, options);
   const outerCandidateAfter = measurePostCleanupResidual(pass.image, alphaMap);
   const improvement = before.score > 1e-6 ? (before.score - candidateAfter.score) / before.score : 0;
+  const requiredImprovement = microEligible ? (options.microMinImprovement ?? 0.006) : (options.minImprovement ?? 0.012);
+  const scoreRatio = microEligible ? 0.994 : 0.988;
   const accepted = pass.correctedPixels > 0
-    && improvement >= (options.minImprovement ?? 0.012)
-    && candidateAfter.score <= before.score * 0.988
+    && improvement >= requiredImprovement
+    && candidateAfter.score <= before.score * scoreRatio
     && outerCandidateAfter.total <= outerBefore.total * 1.006
     && outerCandidateAfter.luma <= outerBefore.luma * 1.010
     && outerCandidateAfter.chroma <= outerBefore.chroma * 1.012;
@@ -205,8 +279,14 @@ export function applyShapeGhostSuppression(image, alphaMap, options = {}) {
       candidatePixels: pass.correctedPixels,
       darkBoostedPixels: accepted ? pass.darkBoostedPixels : 0,
       candidateDarkBoostedPixels: pass.darkBoostedPixels,
+      textureRestoredPixels: accepted ? pass.textureRestoredPixels : 0,
+      candidateTextureRestoredPixels: pass.textureRestoredPixels,
+      microGhostPixels: accepted ? pass.microGhostPixels : 0,
+      candidateMicroGhostPixels: pass.microGhostPixels,
       meanBlend: accepted ? pass.meanBlend : 0,
-      meanAbsLumaDelta: accepted ? pass.meanAbsLumaDelta : 0
+      meanAbsLumaDelta: accepted ? pass.meanAbsLumaDelta : 0,
+      field,
+      microEligible
     }
   };
 }
