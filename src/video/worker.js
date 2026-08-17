@@ -1,7 +1,7 @@
 import { cleanVideo, inspectVideo } from './engine.js';
 import { resetAdaptiveFinishState } from './adaptiveFinish.js';
 
-const APP_VERSION = '1.0.34';
+const APP_VERSION = '1.0.35';
 let cancelled = false;
 
 function shouldCancel() { return cancelled; }
