@@ -1,6 +1,6 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.37",
+  "version": "1.0.38",
   "private": true,
   "type": "module",
   "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with streak-safe directional consensus texture repair, guarded shape-aligned ghost suppression, overwrite-safe download release, adaptive smooth-background reconstruction, safe empty-zone hard suppression, temporally stable mode selection, structured directional consensus reconstruction, structured residual ring suppression with micro-salvage, subpixel alpha registration, detail-preserving restoration, dual-ring finishing and residual-aware cleanup.",
@@ -10,7 +10,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test tests/*.test.mjs",
-    "check": "node --check src/main.js && node --check src/downloadGuard.js && node --check src/calibration-ui.js && node --check src/video/file.js && node --check src/video/analysisPolicy.js && node --check src/video/alpha.js && node --check src/video/calibration.js && node --check src/video/catalog.js && node --check src/video/detect.js && node --check src/video/restore.js && node --check src/video/textureRepair.js && node --check src/video/multiFrameRepair.js && node --check src/video/edgeBridge.js && node --check src/video/smoothBackground.js && node --check src/video/adaptiveFinish.js && node --check src/video/structuredConsensusRepair.js && node --check src/video/shapeGhostSuppress.js && node --check src/video/structuredRingSuppress.js && node --check src/video/emptyZoneHardSuppress.js && node --check src/video/dualRingFinish.js && node --check src/video/engine.js && node --check src/video/worker.js"
+    "check": "node --check src/version.js && node --check src/main.js && node --check src/downloadGuard.js && node --check src/calibration-ui.js && node --check src/video/file.js && node --check src/video/analysisPolicy.js && node --check src/video/alpha.js && node --check src/video/calibration.js && node --check src/video/catalog.js && node --check src/video/detect.js && node --check src/video/restore.js && node --check src/video/textureRepair.js && node --check src/video/multiFrameRepair.js && node --check src/video/edgeBridge.js && node --check src/video/smoothBackground.js && node --check src/video/adaptiveFinish.js && node --check src/video/structuredConsensusRepair.js && node --check src/video/shapeGhostSuppress.js && node --check src/video/structuredRingSuppress.js && node --check src/video/emptyZoneHardSuppress.js && node --check src/video/dualRingFinish.js && node --check src/video/engine.js && node --check src/video/worker.js"
   },
   "dependencies": {
     "mediabunny": "^1.46.0"
