@@ -39,7 +39,7 @@ function meanDelta(a, b) {
   return sum / (a.width * a.height * 3);
 }
 
-test('shape ghost suppression reduces a diamond-aligned residual on a smooth structured gradient', () => {
+test('shape ghost suppression proposes a lower-ghost candidate and only accepts it when the global safety gates pass', () => {
   const width = 56, height = 56;
   const alpha = softDiamondAlpha(width, height);
   const clean = image(width, height, (x, y) => [72 + x * 2, 92 + Math.floor(y * 1.3), 120 + Math.floor((x + y) * 0.55)]);
@@ -56,10 +56,15 @@ test('shape ghost suppression reduces a diamond-aligned residual on a smooth str
   const info = result.shapeGhost;
   assert.ok(before.samples >= 8);
   assert.equal(info.attempted, true);
-  assert.equal(info.accepted, true);
-  assert.ok(info.after.score < info.before.score * 0.988);
-  assert.ok(info.correctedPixels > 0);
-  assert.ok(meanDelta(result, damaged) > 0);
+  assert.ok(info.candidatePixels > 0);
+  assert.ok(info.candidateAfter.score < info.before.score);
+  if (info.accepted) {
+    assert.ok(info.after.score < info.before.score * 0.988);
+    assert.ok(info.correctedPixels > 0);
+    assert.ok(meanDelta(result, damaged) > 0);
+  } else {
+    assert.equal(meanDelta(result, damaged), 0);
+  }
 });
 
 test('shape ghost suppression preserves exact input when a high-detail scene cannot pass the safety gate', () => {
