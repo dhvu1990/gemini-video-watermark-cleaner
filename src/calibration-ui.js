@@ -1,4 +1,5 @@
 import { APP_VERSION } from './version.js';
+import './batchRetryFix.js';
 const result = document.getElementById('detectResult');
 const fields = {
   profile: document.getElementById('calProfile'),
