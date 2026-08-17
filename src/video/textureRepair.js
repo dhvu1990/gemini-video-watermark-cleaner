@@ -140,6 +140,41 @@ function pairPrediction(image, alphaMap, x, y, dx, dy) {
   return { rgb, disagreement, support: 1, distance: total * 0.5 };
 }
 
+function directionalConsensus(candidates) {
+  const strong = candidates
+    .filter((candidate) => candidate.support >= 0.95 && candidate.disagreement <= 58)
+    .sort((a, b) => (a.disagreement + a.distance * 0.7) - (b.disagreement + b.distance * 0.7));
+  const pool = strong.length >= 2 ? strong : candidates
+    .filter((candidate) => candidate.support >= 0.45 && candidate.disagreement <= 86)
+    .sort((a, b) => (a.disagreement + a.distance * 0.7) - (b.disagreement + b.distance * 0.7));
+  if (!pool.length) return null;
+
+  const selected = pool.slice(0, 4);
+  if (selected.length === 1) {
+    return { rgb: selected[0].rgb, confidence: 0.42 * selected[0].support, spread: 0, directions: 1 };
+  }
+
+  const weights = selected.map((candidate) => {
+    const quality = 1 / (1 + candidate.disagreement * 0.055 + candidate.distance * 0.038);
+    return quality * candidate.support;
+  });
+  const weightSum = weights.reduce((sum, weight) => sum + weight, 0) || 1;
+  const rgb = [0, 1, 2].map((channel) => selected.reduce(
+    (sum, candidate, index) => sum + candidate.rgb[channel] * weights[index],
+    0
+  ) / weightSum);
+
+  let spread = 0;
+  for (const candidate of selected) {
+    spread += (Math.abs(candidate.rgb[0] - rgb[0]) + Math.abs(candidate.rgb[1] - rgb[1]) + Math.abs(candidate.rgb[2] - rgb[2])) / 3;
+  }
+  spread /= selected.length;
+  const spreadGuard = smoothstep(10, 62, spread);
+  const directionSupport = clamp((selected.length - 1) / 3, 0, 1);
+  const confidence = clamp((0.58 + directionSupport * 0.42) * (1 - spreadGuard * 0.78), 0.18, 1);
+  return { rgb, confidence, spread, directions: selected.length };
+}
+
 export function applyPaddedTextureRepair(image, alphaMap, strength = 0.72) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0 || alphaMap.length !== image.width * image.height) return image;
@@ -154,20 +189,20 @@ export function applyPaddedTextureRepair(image, alphaMap, strength = 0.72) {
       if (alpha < 0.012) continue;
       const candidates = directions
         .map(([dx, dy]) => pairPrediction(image, alphaMap, x, y, dx, dy))
-        .filter(Boolean)
-        .sort((a, b) => (a.disagreement + a.distance * 0.7) - (b.disagreement + b.distance * 0.7));
-      const best = candidates[0];
-      if (!best) continue;
+        .filter(Boolean);
+      const consensus = directionalConsensus(candidates);
+      if (!consensus) continue;
 
-      const disagreementGuard = smoothstep(24, 100, best.disagreement);
       const edgeWeight = hybridMask.edge[p] || 0;
       const featherWeight = hybridMask.feather[p] || 0;
       const coreWeight = hybridMask.core[p] || 0;
       const regionWeight = clamp(edgeWeight * 0.94 + featherWeight * 0.45 + coreWeight * 0.035, 0, 1);
-      const blend = Math.min(0.80, safeStrength * regionWeight * best.support * (1 - disagreementGuard * 0.82));
+      const multiDirectionGuard = consensus.directions >= 2 ? 1 : (coreWeight > 0.20 ? 0.28 : 0.55);
+      const spreadGuard = 1 - smoothstep(16, 72, consensus.spread) * 0.70;
+      const blend = Math.min(0.76, safeStrength * regionWeight * consensus.confidence * multiDirectionGuard * spreadGuard);
       if (blend < 0.035) continue;
       const idx = p * 4;
-      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(image.data[idx + c] * (1 - blend) + best.rgb[c] * blend);
+      for (let c = 0; c < 3; c++) out[idx + c] = clampByte(image.data[idx + c] * (1 - blend) + consensus.rgb[c] * blend);
     }
   }
   return { width: image.width, height: image.height, data: out };
