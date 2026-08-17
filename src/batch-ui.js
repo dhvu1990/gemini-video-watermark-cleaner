@@ -3,7 +3,7 @@ import { batchFileKey, batchOutputName, BATCH_STATUSES, runnableBatchItems, summ
 const ids = ['batchInput','chooseBatchBtn','batchQueue','batchSummary','batchCleanAllBtn','batchCancelBtn','batchOutputFolderBtn','batchOutputFolderName','batchNameMode'];
 const els = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 
-const state = { items: [], outputDirectory: null, running: false, cancelled: false, activeWorker: null };
+const state = { items: [], outputDirectory: null, running: false, cancelled: false, activeWorker: null, ingesting: false };
 
 function settingNumber(id, fallback) {
   const value = Number(document.getElementById(id)?.value);
@@ -41,16 +41,36 @@ function inspectOptions() {
 function makeItem(file) {
   return { key: batchFileKey(file), file, status: BATCH_STATUSES.QUEUED, progress: 0, phase: 'Waiting', error: '', detection: null, outputUrl: null, outputName: batchOutputName(file.name, els.batchNameMode?.value || 'cleaned') };
 }
-function addFiles(files) {
-  const existing = new Set(state.items.map((item) => item.key));
-  for (const file of Array.from(files || [])) {
-    const key = batchFileKey(file);
-    if (!existing.has(key)) { state.items.push(makeItem(file)); existing.add(key); }
-  }
+function nextFrame() {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 0);
+  });
+}
+async function addFilesDeferred(files) {
+  const selected = Array.from(files || []);
+  if (!selected.length || state.running || state.ingesting) return;
+  state.ingesting = true;
   render();
+  const existing = new Set(state.items.map((item) => item.key));
+  const chunkSize = 24;
+  try {
+    for (let offset = 0; offset < selected.length; offset += chunkSize) {
+      const chunk = selected.slice(offset, offset + chunkSize);
+      for (const file of chunk) {
+        const key = batchFileKey(file);
+        if (!existing.has(key)) { state.items.push(makeItem(file)); existing.add(key); }
+      }
+      if (els.batchSummary) els.batchSummary.textContent = `Adding files… ${Math.min(offset + chunk.length, selected.length)}/${selected.length}`;
+      await nextFrame();
+    }
+  } finally {
+    state.ingesting = false;
+    render();
+  }
 }
 function removeItem(key) {
-  if (state.running) return;
+  if (state.running || state.ingesting) return;
   const index = state.items.findIndex((item) => item.key === key);
   if (index < 0) return;
   if (state.items[index].outputUrl) URL.revokeObjectURL(state.items[index].outputUrl);
@@ -59,9 +79,11 @@ function removeItem(key) {
 }
 function retryItem(key) {
   const item = state.items.find((entry) => entry.key === key);
-  if (!item || state.running) return;
+  if (!item || state.running || state.ingesting) return;
   item.status = BATCH_STATUSES.QUEUED; item.progress = 0; item.phase = 'Waiting'; item.error = '';
+  item.detection = null;
   render();
+  setTimeout(() => runBatch(), 0);
 }
 
 function statusLabel(item) {
@@ -75,11 +97,11 @@ function statusLabel(item) {
 function render() {
   if (!els.batchQueue) return;
   const summary = summarizeBatch(state.items);
-  els.batchSummary.textContent = `${summary.total} file(s) · ${summary.finished} finished · ${summary.error} error(s)`;
-  els.batchCleanAllBtn.disabled = state.running || runnableBatchItems(state.items).length === 0;
+  if (!state.ingesting) els.batchSummary.textContent = `${summary.total} file(s) · ${summary.finished} finished · ${summary.error} error(s)`;
+  els.batchCleanAllBtn.disabled = state.running || state.ingesting || runnableBatchItems(state.items).length === 0;
   els.batchCancelBtn.disabled = !state.running;
-  els.chooseBatchBtn.disabled = state.running;
-  els.batchOutputFolderBtn.disabled = state.running;
+  els.chooseBatchBtn.disabled = state.running || state.ingesting;
+  els.batchOutputFolderBtn.disabled = state.running || state.ingesting;
   els.batchQueue.innerHTML = '';
   for (const item of state.items) {
     const row = document.createElement('div'); row.className = `batch-row status-${item.status}`;
@@ -88,7 +110,7 @@ function render() {
     const actions = document.createElement('div'); actions.className = 'batch-actions';
     if (item.outputUrl && item.status === BATCH_STATUSES.DONE) { const a = document.createElement('a'); a.className = 'button secondary'; a.href = item.outputUrl; a.download = item.outputName; a.textContent = 'Download'; actions.appendChild(a); }
     if (item.status === BATCH_STATUSES.ERROR || item.status === BATCH_STATUSES.CANCELLED) { const retry = document.createElement('button'); retry.className = 'secondary'; retry.textContent = 'Retry'; retry.onclick = () => retryItem(item.key); actions.appendChild(retry); }
-    if (!state.running) { const remove = document.createElement('button'); remove.className = 'secondary'; remove.textContent = 'Remove'; remove.onclick = () => removeItem(item.key); actions.appendChild(remove); }
+    if (!state.running && !state.ingesting) { const remove = document.createElement('button'); remove.className = 'secondary'; remove.textContent = 'Remove'; remove.onclick = () => removeItem(item.key); actions.appendChild(remove); }
     row.append(name, progress, actions); els.batchQueue.appendChild(row);
   }
 }
@@ -139,7 +161,7 @@ async function processOne(item) {
 }
 
 async function runBatch() {
-  if (state.running) return;
+  if (state.running || state.ingesting) return;
   const queue = runnableBatchItems(state.items);
   if (!queue.length) return;
   state.running = true; state.cancelled = false; render();
@@ -157,8 +179,13 @@ async function chooseOutputFolder() {
   catch (error) { if (error?.name !== 'AbortError') alert(error?.message || 'Could not open output folder'); }
 }
 
-els.chooseBatchBtn?.addEventListener('click', () => { if (!state.running) { els.batchInput.value = ''; els.batchInput.click(); } });
-els.batchInput?.addEventListener('change', () => addFiles(els.batchInput.files));
+els.chooseBatchBtn?.addEventListener('click', () => { if (!state.running && !state.ingesting) { els.batchInput.value = ''; els.batchInput.click(); } });
+els.batchInput?.addEventListener('change', () => {
+  const selected = Array.from(els.batchInput.files || []);
+  els.batchInput.value = '';
+  if (!selected.length) return;
+  setTimeout(() => addFilesDeferred(selected), 0);
+});
 els.batchCleanAllBtn?.addEventListener('click', runBatch);
 els.batchCancelBtn?.addEventListener('click', () => { state.cancelled = true; state.activeWorker?.postMessage({ type: 'cancel' }); });
 els.batchOutputFolderBtn?.addEventListener('click', chooseOutputFolder);
