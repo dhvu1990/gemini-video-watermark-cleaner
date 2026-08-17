@@ -116,9 +116,9 @@ export function measureShapeGhostResidual(image, alphaMap, options = {}) {
 }
 
 function applyShapeGhostPass(image, alphaMap, options = {}) {
-  const strength = clamp(Number(options.strength ?? 0.46), 0, 0.72);
+  const strength = clamp(Number(options.strength ?? 0.52), 0, 0.78);
   const out = new Uint8ClampedArray(image.data);
-  let correctedPixels = 0, blendSum = 0, lumaDeltaSum = 0;
+  let correctedPixels = 0, blendSum = 0, lumaDeltaSum = 0, darkBoostedPixels = 0;
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
@@ -126,22 +126,25 @@ function applyShapeGhostPass(image, alphaMap, options = {}) {
       if (!sample) continue;
       if (sample.target.disagreement > (options.maxAnchorDisagreement ?? 76)) continue;
 
-      const alignmentGate = smoothstep(0.42, 0.90, sample.alignment);
-      const residualGate = smoothstep(1.4, 11.5, sample.lumaResidual + sample.chromaResidual * 0.22);
+      const alignmentGate = smoothstep(0.38, 0.88, sample.alignment);
+      const residualGate = smoothstep(1.2, 10.5, sample.lumaResidual + sample.chromaResidual * 0.22);
       const anchorGate = 1 - smoothstep(30, 78, sample.target.disagreement);
       const spanGate = 1 - smoothstep(26, 46, sample.target.span);
       const bodyBand = smoothstep(0.085, 0.20, sample.alpha) * (1 - smoothstep(0.54, 0.70, sample.alpha));
-      const sceneStructureGuard = smoothstep(18, 58, sample.ig.magnitude) * (1 - alignmentGate * 0.72);
-      const blend = Math.min(0.38, strength * bodyBand * residualGate * anchorGate * spanGate * (0.34 + alignmentGate * 0.66) * (1 - sceneStructureGuard * 0.92));
+      const sceneStructureGuard = smoothstep(18, 58, sample.ig.magnitude) * (1 - alignmentGate * 0.86);
+      const darkConfidence = (1 - smoothstep(48, 132, sample.current[0])) * alignmentGate * anchorGate;
+      const darkBoost = 1 + darkConfidence * 0.24;
+      const blend = Math.min(0.46, strength * darkBoost * bodyBand * residualGate * anchorGate * spanGate * (0.30 + alignmentGate * 0.70) * (1 - sceneStructureGuard * 0.88));
       if (blend < 0.028) continue;
 
-      const yDelta = clamp(sample.wanted[0] - sample.current[0], -15, 15) * blend;
-      const chromaBlend = Math.min(0.16, blend * 0.30);
-      const cb = sample.current[1] + clamp(sample.wanted[1] - sample.current[1], -14, 14) * chromaBlend;
-      const cr = sample.current[2] + clamp(sample.wanted[2] - sample.current[2], -14, 14) * chromaBlend;
+      const yDelta = clamp(sample.wanted[0] - sample.current[0], -18, 18) * blend;
+      const chromaBlend = Math.min(0.18, blend * 0.32);
+      const cb = sample.current[1] + clamp(sample.wanted[1] - sample.current[1], -15, 15) * chromaBlend;
+      const cr = sample.current[2] + clamp(sample.wanted[2] - sample.current[2], -15, 15) * chromaBlend;
       const rgb = ycbcrToRgb(sample.current[0] + yDelta, cb, cr);
       out[sample.idx] = rgb[0]; out[sample.idx + 1] = rgb[1]; out[sample.idx + 2] = rgb[2];
       correctedPixels++;
+      if (darkConfidence > 0.20) darkBoostedPixels++;
       blendSum += blend;
       lumaDeltaSum += Math.abs(yDelta);
     }
@@ -150,6 +153,7 @@ function applyShapeGhostPass(image, alphaMap, options = {}) {
   return {
     image: { width: image.width, height: image.height, data: out },
     correctedPixels,
+    darkBoostedPixels,
     meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
     meanAbsLumaDelta: correctedPixels ? lumaDeltaSum / correctedPixels : 0
   };
@@ -199,6 +203,8 @@ export function applyShapeGhostSuppression(image, alphaMap, options = {}) {
       candidateImprovement: improvement,
       correctedPixels: accepted ? pass.correctedPixels : 0,
       candidatePixels: pass.correctedPixels,
+      darkBoostedPixels: accepted ? pass.darkBoostedPixels : 0,
+      candidateDarkBoostedPixels: pass.darkBoostedPixels,
       meanBlend: accepted ? pass.meanBlend : 0,
       meanAbsLumaDelta: accepted ? pass.meanAbsLumaDelta : 0
     }
