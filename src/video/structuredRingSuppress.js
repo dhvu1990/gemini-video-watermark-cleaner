@@ -1,6 +1,7 @@
 import { buildHybridRepairMask } from './textureRepair.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
 import { applyStructuredConsensusRepair } from './structuredConsensusRepair.js';
+import { applyShapeGhostSuppression } from './shapeGhostSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -182,6 +183,13 @@ function applyStructuredRingPass(image, alphaMap, strength = 0.50) {
   return { image: { width: image.width, height: image.height, data: out }, correctedPixels, meanBlend: correctedPixels ? blendSum / correctedPixels : 0, meanAbsLumaDelta: correctedPixels ? deltaSum / correctedPixels : 0 };
 }
 
+function finishWithShapeGhost(image, alphaMap, options) {
+  if (options.shapeGhost === false) {
+    return { width: image.width, height: image.height, data: image.data, shapeGhost: { enabled: false, attempted: false, accepted: false } };
+  }
+  return applyShapeGhostSuppression(image, alphaMap, { enabled: true, ...(options.shapeGhostOptions || {}) });
+}
+
 export function applyStructuredResidualRingSuppression(image, alphaMap, options = {}) {
   if (options.enabled === false || alphaMap.length !== image.width * image.height) {
     return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredRing: { enabled: false, attempted: false, accepted: false } };
@@ -201,15 +209,18 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   const lumaThreshold = Number.isFinite(options.lumaThreshold) ? options.lumaThreshold : 1.35;
   const shouldAttempt = before.total >= totalThreshold || before.luma >= lumaThreshold || alignedBefore.score >= 1.40;
   if (!shouldAttempt) {
+    const ghostResult = finishWithShapeGhost(working, alphaMap, options);
+    const shapeGhost = ghostResult.shapeGhost || { enabled: true, attempted: true, accepted: false };
+    const ghostSelected = shapeGhost.accepted ? ghostResult : working;
     return {
-      width: working.width,
-      height: working.height,
-      data: working === image ? new Uint8ClampedArray(image.data) : working.data,
+      width: ghostSelected.width,
+      height: ghostSelected.height,
+      data: ghostSelected === image ? new Uint8ClampedArray(image.data) : ghostSelected.data,
       structuredRing: {
         enabled: true,
         attempted: false,
-        accepted: consensus.accepted,
-        acceptedMode: consensus.accepted ? 'consensus' : 'none',
+        accepted: consensus.accepted || shapeGhost.accepted,
+        acceptedMode: shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none'),
         before,
         after: before,
         alignedBefore,
@@ -218,7 +229,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
         correctedPixels: 0,
         salvageAttempted: false,
         salvageAccepted: false,
-        consensus
+        consensus,
+        shapeGhost
       }
     };
   }
@@ -270,6 +282,13 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   }
 
   const ringAccepted = accepted || salvageAccepted;
+  const ghostResult = finishWithShapeGhost(selected, alphaMap, options);
+  const shapeGhost = ghostResult.shapeGhost || { enabled: true, attempted: true, accepted: false };
+  if (shapeGhost.accepted) selected = { width: ghostResult.width, height: ghostResult.height, data: ghostResult.data };
+  const acceptedMode = shapeGhost.accepted
+    ? (accepted ? 'primary+shape-ghost' : (salvageAccepted ? 'micro-salvage+shape-ghost' : (consensus.accepted ? 'consensus+shape-ghost' : 'shape-ghost')))
+    : (accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')));
+
   return {
     width: selected.width,
     height: selected.height,
@@ -277,9 +296,9 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     structuredRing: {
       enabled: true,
       attempted: true,
-      accepted: ringAccepted || consensus.accepted,
+      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted,
       ringAccepted,
-      acceptedMode: accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')),
+      acceptedMode,
       before,
       after: finalAfter,
       candidateAfter: after,
@@ -298,7 +317,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       salvageCandidateAlignedAfter,
       salvageCandidatePixels,
       salvageNearMissRatio: nearMissRatio,
-      consensus
+      consensus,
+      shapeGhost
     }
   };
 }
