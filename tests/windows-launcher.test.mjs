@@ -49,7 +49,7 @@ test('installer keeps auth in GitHub CLI and creates a local desktop shortcut', 
 });
 
 test('runtime version uses one shared source of truth', () => {
-  assert.match(version, /export const APP_VERSION = '1\.0\.41'/);
+  assert.match(version, /export const APP_VERSION = '1\.0\.42'/);
   assert.match(ui, /import \{ APP_VERSION \} from '\.\/version\.js'/);
   assert.match(worker, /import \{ APP_VERSION \} from '\.\.\/version\.js'/);
   assert.match(ui, /firstBadge\.textContent = `v\$\{APP_VERSION\}`/);
