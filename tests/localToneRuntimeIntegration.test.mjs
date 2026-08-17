@@ -42,9 +42,9 @@ test('structured cleanup exposes guarded local-tone diagnostics after center-sea
     }
   });
 
-  assert.equal(result.structuredRing.attempted, false);
   assert.equal(result.structuredRing.localToneMatch.enabled, true);
   assert.ok(result.structuredRing.localToneMatch.before);
+  assert.equal(result.structuredRing.centerSeam.enabled, false);
   if (result.structuredRing.localToneMatch.accepted) {
     assert.ok(result.structuredRing.acceptedMode.includes('local-tone'));
   } else {
