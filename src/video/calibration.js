@@ -1,5 +1,7 @@
 import { getVideoAlphaMap } from './alpha.js';
 import { applyEdgePolish, inverseAlphaRestore } from './restore.js';
+import { measureCalibrationArtifactResidual } from './calibrationArtifactMetrics.js';
+import { rerankCalibrationCandidates } from './calibrationRerank.js';
 
 const PROFILES = ['96-20260520', '96'];
 const SHAPE_SCALES = [0.985, 1.0, 1.015];
@@ -303,7 +305,36 @@ function scoreSamples(samples, alphaMap, bodyGain, edgePolish, polish = true) {
   return { total: total / count, buckets: bucketTotals };
 }
 
-export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish = 0.35, onProgress }) {
+function scoreArtifactSamples(samples, alphaMap, bodyGain, edgePolish) {
+  let weightedScore = 0;
+  let coverageSum = 0;
+  const details = [];
+  for (const roi of samples) {
+    let cleaned = inverseAlphaRestore(roi, alphaMap, bodyGain);
+    cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
+    const artifact = measureCalibrationArtifactResidual(cleaned, alphaMap);
+    details.push(artifact);
+    weightedScore += artifact.score * artifact.coverage;
+    coverageSum += artifact.coverage;
+  }
+  const count = Math.max(1, samples.length);
+  return {
+    score: coverageSum > 1e-9 ? weightedScore / coverageSum : 0,
+    coverage: clamp(coverageSum / count, 0, 1),
+    samples: details
+  };
+}
+
+export async function calibrateAlphaShape({
+  rois,
+  size,
+  bodyGain = 1,
+  edgePolish = 0.35,
+  onProgress,
+  artifactRerank = true,
+  artifactTopN = 4,
+  artifactWeight = 0.055
+}) {
   const samples = (rois || []).filter(Boolean).slice(0, 3);
   if (!samples.length) return null;
 
@@ -335,6 +366,8 @@ export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish
     residualBuckets: null,
     alphaMap: baselineMap
   };
+  let bestSelectionScore = Number.POSITIVE_INFINITY;
+  const candidates = [];
 
   let index = 0;
   const coarseTotal = PROFILES.length * SHAPE_SCALES.length * EDGE_BOOSTS.length * EDGE_GAINS.length;
@@ -346,8 +379,18 @@ export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish
           index++;
           const alphaMap = await buildCalibratedAlphaMap(size, { profile, shapeScale, edgeBoost, edgeGain, offsetX: 0, offsetY: 0 });
           const score = scoreSamples(samples, alphaMap, selectedBodyGain, edgePolish, true);
-          if (score.total < best.residualScore) {
-            best = { profile, shapeScale, edgeBoost, edgeGain, offsetX: 0, offsetY: 0, bodyGain: selectedBodyGain, residualScore: score.total, residualBuckets: score.buckets, alphaMap };
+          const candidate = {
+            profile, shapeScale, edgeBoost, edgeGain, offsetX: 0, offsetY: 0,
+            bodyGain: selectedBodyGain,
+            residualScore: score.total,
+            residualBuckets: score.buckets,
+            selectionScore: score.total,
+            alphaMap
+          };
+          candidates.push(candidate);
+          if (candidate.selectionScore < bestSelectionScore) {
+            best = candidate;
+            bestSelectionScore = candidate.selectionScore;
           }
           if (index % 6 === 0) onProgress?.({ index, total, progress: index / total, phase: 'coarse-alpha-fit' });
         }
@@ -369,10 +412,65 @@ export async function calibrateAlphaShape({ rois, size, bodyGain = 1, edgePolish
       });
       const score = scoreSamples(samples, alphaMap, selectedBodyGain, edgePolish, true);
       const offsetPenalty = (Math.abs(offsetX) + Math.abs(offsetY)) * 0.025;
-      if (score.total + offsetPenalty < best.residualScore) {
-        best = { ...coarseBest, offsetX, offsetY, residualScore: score.total, residualBuckets: score.buckets, alphaMap };
+      const candidate = {
+        profile: coarseBest.profile,
+        shapeScale: coarseBest.shapeScale,
+        edgeBoost: coarseBest.edgeBoost,
+        edgeGain: coarseBest.edgeGain,
+        offsetX,
+        offsetY,
+        bodyGain: selectedBodyGain,
+        residualScore: score.total,
+        residualBuckets: score.buckets,
+        selectionScore: score.total + offsetPenalty,
+        offsetPenalty,
+        alphaMap
+      };
+      candidates.push(candidate);
+      if (candidate.selectionScore < bestSelectionScore) {
+        best = candidate;
+        bestSelectionScore = candidate.selectionScore;
       }
       onProgress?.({ index, total, progress: index / total, phase: 'subpixel-alpha-fit' });
+    }
+  }
+
+  if (artifactRerank !== false) {
+    const reranked = await rerankCalibrationCandidates(
+      candidates,
+      async (candidate, artifactIndex, artifactTotal) => {
+        const artifact = scoreArtifactSamples(samples, candidate.alphaMap, selectedBodyGain, edgePolish);
+        onProgress?.({
+          index: total,
+          total,
+          progress: 1,
+          phase: 'artifact-rerank',
+          artifactIndex: artifactIndex + 1,
+          artifactTotal
+        });
+        return artifact;
+      },
+      { topN: artifactTopN, artifactWeight, maxRelativePenalty: 0.10 }
+    );
+    if (reranked.selected) {
+      best = reranked.selected;
+      best.artifactRerank = {
+        topN: reranked.topN,
+        evaluated: reranked.evaluated.map((candidate) => ({
+          profile: candidate.profile,
+          shapeScale: candidate.shapeScale,
+          edgeBoost: candidate.edgeBoost,
+          edgeGain: candidate.edgeGain,
+          offsetX: candidate.offsetX,
+          offsetY: candidate.offsetY,
+          residualScore: candidate.residualScore,
+          selectionScore: candidate.selectionScore,
+          artifactScore: candidate.artifactResidual?.score || 0,
+          artifactCoverage: candidate.artifactResidual?.coverage || 0,
+          finalScore: candidate.finalScore
+        }))
+      };
+      best.calibrationScore = reranked.selected.finalScore;
     }
   }
 
