@@ -45,6 +45,24 @@ test('summarizes rerank counts, coverage gate and selected artifact penalty', ()
   assert.equal(summary.evaluated.length, 2);
 });
 
+test('copied selected object with the base-winning calibration identity is not reported as changed', () => {
+  const base = {
+    profile: '96-20260520', shapeScale: 1, edgeBoost: 0.03, edgeGain: 1,
+    offsetX: 0, offsetY: 0, bodyGain: 0.98,
+    selectionScore: 7.5,
+    finalScore: 7.5
+  };
+  const selectedCopy = { ...base };
+  const summary = summarizeCalibrationRerank({
+    selected: selectedCopy,
+    evaluated: [base]
+  });
+
+  assert.notEqual(selectedCopy, base);
+  assert.equal(summary.selectedChangedFromBase, false);
+  assert.deepEqual(summary.selectedIdentity, summary.baseWinnerIdentity);
+});
+
 test('empty rerank data produces a stable zero-value diagnostic object', () => {
   const summary = summarizeCalibrationRerank();
   assert.equal(summary.topN, 0);
