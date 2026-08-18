@@ -4,6 +4,7 @@ import { applyStructuredConsensusRepair } from './structuredConsensusRepair.js';
 import { applyShapeGhostSuppression } from './shapeGhostSuppress.js';
 import { applyCenterSeamSuppression } from './centerSeamSuppress.js';
 import { applyLocalToneMatch } from './localToneMatch.js';
+import { applyOuterHaloSuppression } from './outerHaloSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -206,6 +207,13 @@ function finishWithLocalTone(image, alphaMap, options) {
   return applyLocalToneMatch(image, alphaMap, { enabled: true, ...(options.localToneOptions || {}) });
 }
 
+function finishWithOuterHalo(image, alphaMap, options) {
+  if (options.outerHalo === false) {
+    return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), outerHalo: { enabled: false, attempted: false, accepted: false } };
+  }
+  return applyOuterHaloSuppression(image, alphaMap, { enabled: true, ...(options.outerHaloOptions || {}) });
+}
+
 function appendMode(baseMode, suffix, accepted) {
   if (!accepted) return baseMode;
   return baseMode && baseMode !== 'none' ? `${baseMode}+${suffix}` : suffix;
@@ -241,9 +249,13 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     const toneResult = finishWithLocalTone(selected, alphaMap, options);
     const localToneMatch = toneResult.localToneMatch || { enabled: true, attempted: true, accepted: false };
     if (localToneMatch.accepted) selected = { width: toneResult.width, height: toneResult.height, data: toneResult.data };
+    const haloResult = finishWithOuterHalo(selected, alphaMap, options);
+    const outerHalo = haloResult.outerHalo || { enabled: true, attempted: true, accepted: false };
+    if (outerHalo.accepted) selected = { width: haloResult.width, height: haloResult.height, data: haloResult.data };
     let acceptedMode = shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none');
     acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
     acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
+    acceptedMode = appendMode(acceptedMode, 'outer-halo', outerHalo.accepted);
     return {
       width: selected.width,
       height: selected.height,
@@ -251,7 +263,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       structuredRing: {
         enabled: true,
         attempted: false,
-        accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted,
+        accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted,
         acceptedMode,
         before,
         after: before,
@@ -264,7 +276,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
         consensus,
         shapeGhost,
         centerSeam,
-        localToneMatch
+        localToneMatch,
+        outerHalo
       }
     };
   }
@@ -328,11 +341,16 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   const localToneMatch = toneResult.localToneMatch || { enabled: true, attempted: true, accepted: false };
   if (localToneMatch.accepted) selected = { width: toneResult.width, height: toneResult.height, data: toneResult.data };
 
+  const haloResult = finishWithOuterHalo(selected, alphaMap, options);
+  const outerHalo = haloResult.outerHalo || { enabled: true, attempted: true, accepted: false };
+  if (outerHalo.accepted) selected = { width: haloResult.width, height: haloResult.height, data: haloResult.data };
+
   let acceptedMode = shapeGhost.accepted
     ? (accepted ? 'primary+shape-ghost' : (salvageAccepted ? 'micro-salvage+shape-ghost' : (consensus.accepted ? 'consensus+shape-ghost' : 'shape-ghost')))
     : (accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')));
   acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
   acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
+  acceptedMode = appendMode(acceptedMode, 'outer-halo', outerHalo.accepted);
 
   return {
     width: selected.width,
@@ -341,7 +359,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     structuredRing: {
       enabled: true,
       attempted: true,
-      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted,
+      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted,
       ringAccepted,
       acceptedMode,
       before,
@@ -365,7 +383,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       consensus,
       shapeGhost,
       centerSeam,
-      localToneMatch
+      localToneMatch,
+      outerHalo
     }
   };
 }
