@@ -1,4 +1,5 @@
 import { APP_VERSION } from './version.js';
+import { formatAntiStreakTelemetry } from './antiStreakTelemetryFormat.js';
 import './batchRetryFix.js';
 const result = document.getElementById('detectResult');
 const fields = {
@@ -27,7 +28,24 @@ const fields = {
   emptyZoneImprovement: document.getElementById('emptyZoneImprovement'),
   structuredAttempted: document.getElementById('structuredAttempted'),
   structuredAccepted: document.getElementById('structuredAccepted'),
-  structuredCandidateResidual: document.getElementById('structuredCandidateResidual')
+  structuredCandidateResidual: document.getElementById('structuredCandidateResidual'),
+  antiRiskFlags: document.getElementById('antiRiskFlags'),
+  antiDonorAttempted: document.getElementById('antiDonorAttempted'),
+  antiDonorAccepted: document.getElementById('antiDonorAccepted'),
+  antiDonorReason: document.getElementById('antiDonorReason'),
+  antiDonorGuardedRatio: document.getElementById('antiDonorGuardedRatio'),
+  antiDonorMismatch: document.getElementById('antiDonorMismatch'),
+  antiDonorTotalRatio: document.getElementById('antiDonorTotalRatio'),
+  antiAtlasDonors: document.getElementById('antiAtlasDonors'),
+  antiAtlasConfidence: document.getElementById('antiAtlasConfidence'),
+  antiAtlasSpread: document.getElementById('antiAtlasSpread'),
+  antiStructuredAttempted: document.getElementById('antiStructuredAttempted'),
+  antiStructuredAccepted: document.getElementById('antiStructuredAccepted'),
+  antiStructuredMode: document.getElementById('antiStructuredMode'),
+  antiStructuredBefore: document.getElementById('antiStructuredBefore'),
+  antiStructuredAfter: document.getElementById('antiStructuredAfter'),
+  antiStructuredDensity: document.getElementById('antiStructuredDensity'),
+  antiStructuredImprovement: document.getElementById('antiStructuredImprovement')
 };
 function reset() { for (const field of Object.values(fields)) if (field) field.value = '-'; }
 function format(value, digits = 3) { return Number.isFinite(value) ? Number(value).toFixed(digits) : '-'; }
@@ -45,6 +63,7 @@ function syncVisibleVersion() {
   const firstBadge = document.querySelector('.badges span');
   if (firstBadge) firstBadge.textContent = `v${APP_VERSION}`;
 }
+function assign(field, value) { if (field) field.value = value; }
 function render() {
   if (!result) return;
   try {
@@ -93,6 +112,25 @@ function render() {
         : structured.candidateAfter?.total;
       fields.structuredCandidateResidual.value = format(candidate, 3);
     }
+
+    const anti = formatAntiStreakTelemetry(payload?.antiStreak);
+    assign(fields.antiRiskFlags, anti.riskFlags);
+    assign(fields.antiDonorAttempted, anti.donorAttempted);
+    assign(fields.antiDonorAccepted, anti.donorAccepted);
+    assign(fields.antiDonorReason, anti.donorReason);
+    assign(fields.antiDonorGuardedRatio, anti.donorGuardedRatio);
+    assign(fields.antiDonorMismatch, anti.donorStructureMismatch);
+    assign(fields.antiDonorTotalRatio, anti.donorTotalRatio);
+    assign(fields.antiAtlasDonors, anti.atlasDonors);
+    assign(fields.antiAtlasConfidence, anti.atlasConfidence);
+    assign(fields.antiAtlasSpread, anti.atlasDonorSpread);
+    assign(fields.antiStructuredAttempted, anti.structuredAttempted);
+    assign(fields.antiStructuredAccepted, anti.structuredAccepted);
+    assign(fields.antiStructuredMode, anti.structuredMode);
+    assign(fields.antiStructuredBefore, anti.structuredBefore);
+    assign(fields.antiStructuredAfter, anti.structuredAfter);
+    assign(fields.antiStructuredDensity, anti.structuredDensity);
+    assign(fields.antiStructuredImprovement, anti.structuredImprovement);
   } catch { reset(); }
 }
 syncVisibleVersion();
