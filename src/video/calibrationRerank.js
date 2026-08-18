@@ -64,7 +64,12 @@ export function combineCalibrationArtifactScore(baseScore, artifact, options = {
   if (!Number.isFinite(safeBase)) return Number.POSITIVE_INFINITY;
   const coverage = clamp(Number(artifact?.coverage) || 0, 0, 1);
   const artifactScore = Math.max(0, Number(artifact?.score) || 0);
-  if (coverage <= 0 || artifactScore <= 0) return safeBase;
+  const minCoverage = clamp(
+    Number.isFinite(Number(options.minCoverage)) ? Number(options.minCoverage) : 0.40,
+    0,
+    1
+  );
+  if (coverage < minCoverage || artifactScore <= 0) return safeBase;
 
   const artifactWeight = clamp(Number(options.artifactWeight ?? 0.055), 0, 0.20);
   const maxRelativePenalty = clamp(Number(options.maxRelativePenalty ?? 0.10), 0, 0.25);
@@ -77,6 +82,11 @@ export async function rerankCalibrationCandidates(candidates, evaluateArtifact, 
   const valid = (candidates || [])
     .filter((candidate) => candidate && Number.isFinite(candidate.selectionScore))
     .sort((a, b) => a.selectionScore - b.selectionScore);
+  const minCoverage = clamp(
+    Number.isFinite(Number(options.minCoverage)) ? Number(options.minCoverage) : 0.40,
+    0,
+    1
+  );
   if (!valid.length) {
     return {
       selected: null,
@@ -89,7 +99,8 @@ export async function rerankCalibrationCandidates(candidates, evaluateArtifact, 
       excludedByGap: 0,
       bestSelectionScore: Number.POSITIVE_INFINITY,
       maxRelativeGap: 0,
-      maxAbsoluteGap: 0
+      maxAbsoluteGap: 0,
+      minCoverage
     };
   }
 
@@ -105,8 +116,13 @@ export async function rerankCalibrationCandidates(candidates, evaluateArtifact, 
     const artifact = typeof evaluateArtifact === 'function'
       ? await evaluateArtifact(candidate, index, finalists.length)
       : null;
-    const finalScore = combineCalibrationArtifactScore(candidate.selectionScore, artifact, options);
-    evaluated.push({ ...candidate, artifactResidual: artifact, finalScore });
+    const finalScore = combineCalibrationArtifactScore(candidate.selectionScore, artifact, { ...options, minCoverage });
+    evaluated.push({
+      ...candidate,
+      artifactResidual: artifact,
+      artifactCoverageEligible: (Number(artifact?.coverage) || 0) >= minCoverage,
+      finalScore
+    });
   }
 
   evaluated.sort((a, b) => {
@@ -125,6 +141,7 @@ export async function rerankCalibrationCandidates(candidates, evaluateArtifact, 
     excludedByGap: unique.length - nearTie.candidates.length,
     bestSelectionScore: nearTie.bestSelectionScore,
     maxRelativeGap: nearTie.maxRelativeGap,
-    maxAbsoluteGap: nearTie.maxAbsoluteGap
+    maxAbsoluteGap: nearTie.maxAbsoluteGap,
+    minCoverage
   };
 }
