@@ -1,5 +1,30 @@
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
+function calibrationCandidateKey(candidate) {
+  if (!candidate) return null;
+  if (candidate.candidateKey != null) return `explicit:${String(candidate.candidateKey)}`;
+  const fields = ['profile', 'shapeScale', 'edgeBoost', 'edgeGain', 'offsetX', 'offsetY', 'bodyGain'];
+  const hasCalibrationIdentity = fields.some((field) => candidate[field] != null);
+  if (!hasCalibrationIdentity) return null;
+  return fields.map((field) => `${field}:${candidate[field] ?? ''}`).join('|');
+}
+
+function uniqueCalibrationCandidates(sortedCandidates) {
+  const seen = new Set();
+  const unique = [];
+  for (const candidate of sortedCandidates) {
+    const key = calibrationCandidateKey(candidate);
+    if (key == null) {
+      unique.push(candidate);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(candidate);
+  }
+  return unique;
+}
+
 export function combineCalibrationArtifactScore(baseScore, artifact, options = {}) {
   const safeBase = Number.isFinite(baseScore) ? Math.max(0, baseScore) : Number.POSITIVE_INFINITY;
   if (!Number.isFinite(safeBase)) return Number.POSITIVE_INFINITY;
@@ -18,11 +43,14 @@ export async function rerankCalibrationCandidates(candidates, evaluateArtifact, 
   const valid = (candidates || [])
     .filter((candidate) => candidate && Number.isFinite(candidate.selectionScore))
     .sort((a, b) => a.selectionScore - b.selectionScore);
-  if (!valid.length) return { selected: null, evaluated: [], topN: 0 };
+  if (!valid.length) {
+    return { selected: null, evaluated: [], topN: 0, inputCount: 0, uniqueCount: 0, duplicateCount: 0 };
+  }
 
+  const unique = uniqueCalibrationCandidates(valid);
   const requestedTopN = Math.round(Number(options.topN ?? 4));
-  const topN = Math.min(valid.length, clamp(requestedTopN || 4, 1, 6));
-  const finalists = valid.slice(0, topN);
+  const topN = Math.min(unique.length, clamp(requestedTopN || 4, 1, 6));
+  const finalists = unique.slice(0, topN);
   const evaluated = [];
 
   for (let index = 0; index < finalists.length; index++) {
@@ -39,5 +67,12 @@ export async function rerankCalibrationCandidates(candidates, evaluateArtifact, 
     return a.selectionScore - b.selectionScore;
   });
 
-  return { selected: evaluated[0], evaluated, topN };
+  return {
+    selected: evaluated[0],
+    evaluated,
+    topN,
+    inputCount: valid.length,
+    uniqueCount: unique.length,
+    duplicateCount: valid.length - unique.length
+  };
 }
