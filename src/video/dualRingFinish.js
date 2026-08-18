@@ -3,6 +3,7 @@ import { analyzeSmoothBackground, applySmoothBackgroundReconstruction } from './
 import { stabilizeSmoothBackgroundMode } from './adaptiveFinish.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
 import { applyStructuredResidualRingSuppression } from './structuredRingSuppress.js';
+import { summarizeStructuredRingDiagnostics } from './structuredRingDiagnostics.js';
 import { applySafeEmptyZoneHardSuppression } from './emptyZoneHardSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -338,7 +339,11 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
         ? 'post-smooth-rebuild'
         : (structuredRing.accepted ? 'post-structured-ring-suppression' : 'post-structured-finish'))
   };
-  smoothBackground = { ...smoothBackground, emptyZoneHard, structuredRing };
+  const structuredRingDiagnostics = summarizeStructuredRingDiagnostics(
+    structuredRing,
+    selected.width * selected.height
+  );
+  smoothBackground = { ...smoothBackground, emptyZoneHard, structuredRing, structuredRingDiagnostics };
   return {
     width: selected.width,
     height: selected.height,
@@ -353,11 +358,13 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
       secondPass,
       smoothBackground,
       structuredRing,
+      structuredRingDiagnostics,
       emptyZoneHard,
       finalCleanup
     },
     smoothBackground,
     structuredRing,
+    structuredRingDiagnostics,
     emptyZoneHard,
     finalCleanup
   };
