@@ -54,6 +54,41 @@ test('anti-streak summary flags rejected temporal donor, active structure guard,
   ]);
 });
 
+test('accepted structured low-gain residual from real preview telemetry is flagged', () => {
+  const summary = summarizeAntiStreakDiagnostics({
+    structuredRingDiagnostics: {
+      attempted: true,
+      accepted: true,
+      acceptedMode: 'primary+shape-ghost',
+      alignedBeforeScore: 1.720,
+      alignedAfterScore: 1.635,
+      alignedSampleDensity: 0.048,
+      alignedImprovement: 0.049
+    }
+  });
+
+  assert.equal(summary.structured.accepted, true);
+  assert.equal(summary.structured.acceptedLowGain, true);
+  assert.ok(summary.riskFlags.includes('accepted-structured-low-gain'));
+});
+
+test('accepted structured cleanup with healthy improvement stays quiet', () => {
+  const summary = summarizeAntiStreakDiagnostics({
+    structuredRingDiagnostics: {
+      attempted: true,
+      accepted: true,
+      acceptedMode: 'primary',
+      alignedBeforeScore: 1.72,
+      alignedAfterScore: 1.42,
+      alignedSampleDensity: 0.048,
+      alignedImprovement: 0.174
+    }
+  });
+
+  assert.equal(summary.structured.acceptedLowGain, false);
+  assert.ok(!summary.riskFlags.includes('accepted-structured-low-gain'));
+});
+
 test('anti-streak summary is stable and quiet for empty diagnostics', () => {
   const summary = summarizeAntiStreakDiagnostics();
   assert.equal(summary.temporalDonor.attempted, false);
