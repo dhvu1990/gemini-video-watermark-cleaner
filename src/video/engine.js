@@ -24,6 +24,7 @@ import {
 import { applyBackgroundAtlas, buildBackgroundAtlas, summarizeAtlas } from './multiFrameRepair.js';
 import { applyNormalEdgeBridge } from './edgeBridge.js';
 import { applyDualRingLumaFinish } from './dualRingFinish.js';
+import { evaluateTemporalDonorAcceptance } from './temporalDonorAcceptance.js';
 
 const DEFAULT_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
 const REPAIR_PADDING = 14;
@@ -103,7 +104,7 @@ function cropImageData(imageData, position) {
   return { width, height, data };
 }
 
-function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, history = [], allowMaskedDonors = false) {
+export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, history = [], allowMaskedDonors = false) {
   const original = cropRegion(paddedOriginal, inner.offsetX, inner.offsetY, inner.width, inner.height);
   let cleaned = inverseAlphaRestore(original, alphaMap, gain);
   cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
@@ -111,15 +112,31 @@ function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, h
   let repaired = pasteRegion(paddedOriginal, cleaned, inner.offsetX, inner.offsetY);
   repaired = applyPaddedTextureRepair(repaired, paddedAlpha, 0.68);
   let atlasSummary = { donorCount: 0, supportedPixels: 0, meanConfidence: 0 };
+  let temporalDonorAcceptance = { enabled: true, attempted: false, accepted: false, reason: 'atlas-or-no-history' };
   if (history.length) {
     const atlas = buildBackgroundAtlas(paddedOriginal, history, paddedAlpha, { maxHistory: MAX_ATLAS_HISTORY, maxShift: 9, minImprovement: 0.06, allowMaskedDonors });
     atlasSummary = summarizeAtlas(atlas);
     const minimumDonors = allowMaskedDonors ? 3 : 2;
     if (atlasSummary.donorCount >= minimumDonors && atlasSummary.supportedPixels >= Math.max(24, inner.width)) {
       repaired = applyBackgroundAtlas(repaired, paddedAlpha, atlas, allowMaskedDonors ? 0.88 : 0.94);
+      temporalDonorAcceptance = { enabled: true, attempted: false, accepted: false, reason: 'atlas-selected' };
     } else if (!allowMaskedDonors) {
       const previousPadded = history[history.length - 1];
-      if (previousPadded) repaired = applyTemporalDonorRepair(repaired, paddedOriginal, previousPadded, paddedAlpha, 0.52);
+      if (previousPadded) {
+        const baseline = repaired;
+        const candidate = applyTemporalDonorRepair(baseline, paddedOriginal, previousPadded, paddedAlpha, 0.52);
+        const acceptance = evaluateTemporalDonorAcceptance(baseline, candidate, paddedAlpha);
+        repaired = acceptance.image;
+        temporalDonorAcceptance = {
+          ...acceptance.diagnostics,
+          temporalShift: candidate.temporalShift || null,
+          temporalDonor: candidate.temporalDonor || null
+        };
+      } else {
+        temporalDonorAcceptance = { enabled: true, attempted: false, accepted: false, reason: 'no-previous-donor' };
+      }
+    } else {
+      temporalDonorAcceptance = { enabled: true, attempted: false, accepted: false, reason: 'masked-donor-atlas-only' };
     }
   }
   repaired = applyNormalEdgeBridge(repaired, paddedAlpha, 0.90);
@@ -131,6 +148,7 @@ function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, h
     repairedPadded: repaired,
     paddedAlpha,
     atlasSummary,
+    temporalDonorAcceptance,
     edgeBridge,
     dualRingFinish: repaired.dualRingFinish || null
   };
@@ -150,6 +168,7 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     original: repaired.original,
     cleaned: repaired.cleaned,
     atlas: repaired.atlasSummary,
+    temporalDonorAcceptance: repaired.temporalDonorAcceptance,
     edgeBridge: repaired.edgeBridge,
     dualRingFinish: repaired.dualRingFinish
   };
@@ -271,6 +290,7 @@ export async function cleanVideo(file, options = {}) {
   let processedFrames = 0, skippedFrames = 0, previousGain = requestedGain, previousTemporal = null, history = [];
   let atlasFrames = 0, atlasDonorsPeak = 0, bridgeFrames = 0, bridgePixelsPeak = 0;
   let dualRingFrames = 0, dualRingPixelsPeak = 0, dualRingImprovementSum = 0;
+  let temporalDonorAttemptedFrames = 0, temporalDonorAcceptedFrames = 0, temporalDonorRejectedFrames = 0;
   const lowGate = Number.isFinite(options.lowGate) ? options.lowGate : 0.025;
   const fallbackDuration = 1 / Math.max(1, metadata.frameRate);
   try {
@@ -295,6 +315,11 @@ export async function cleanVideo(file, options = {}) {
           const repaired = repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, options.edgePolish ?? 0.35, options.temporalStabilize !== false ? history : [], options.temporalStabilize !== false);
           let processed = repaired.cleaned;
           if (repaired.atlasSummary?.donorCount >= 3) { atlasFrames++; atlasDonorsPeak = Math.max(atlasDonorsPeak, repaired.atlasSummary.donorCount); }
+          if (repaired.temporalDonorAcceptance?.attempted) {
+            temporalDonorAttemptedFrames++;
+            if (repaired.temporalDonorAcceptance.accepted) temporalDonorAcceptedFrames++;
+            else temporalDonorRejectedFrames++;
+          }
           if (repaired.edgeBridge?.bridgedPixels > 0) { bridgeFrames++; bridgePixelsPeak = Math.max(bridgePixelsPeak, repaired.edgeBridge.bridgedPixels); }
           if (repaired.dualRingFinish?.correctedPixels > 0) {
             dualRingFrames++;
@@ -329,6 +354,8 @@ export async function cleanVideo(file, options = {}) {
           hybridCoreRing: true, normalEdgeBridge: true, microEdgeFinish: true, quadrantChromaFinish: true,
           dualRingLumaFinish: true, subpixelAlphaRegistration: true,
           bridgeFrames, bridgePixelsPeak, atlasFrames, atlasDonorsPeak, historyLimit: MAX_ATLAS_HISTORY,
+          temporalDonorAcceptance: true,
+          temporalDonorAttemptedFrames, temporalDonorAcceptedFrames, temporalDonorRejectedFrames,
           dualRingFrames, dualRingPixelsPeak,
           meanDualRingImprovement: dualRingFrames ? dualRingImprovementSum / dualRingFrames : 0
         },
