@@ -333,7 +333,9 @@ export async function calibrateAlphaShape({
   onProgress,
   artifactRerank = true,
   artifactTopN = 4,
-  artifactWeight = 0.055
+  artifactWeight = 0.055,
+  artifactMaxRelativeGap = 0.02,
+  artifactMaxAbsoluteGap = 0.20
 }) {
   const samples = (rois || []).filter(Boolean).slice(0, 3);
   if (!samples.length) return null;
@@ -450,12 +452,26 @@ export async function calibrateAlphaShape({
         });
         return artifact;
       },
-      { topN: artifactTopN, artifactWeight, maxRelativePenalty: 0.10 }
+      {
+        topN: artifactTopN,
+        artifactWeight,
+        maxRelativePenalty: 0.10,
+        maxRelativeGap: artifactMaxRelativeGap,
+        maxAbsoluteGap: artifactMaxAbsoluteGap
+      }
     );
     if (reranked.selected) {
       best = reranked.selected;
       best.artifactRerank = {
         topN: reranked.topN,
+        inputCount: reranked.inputCount,
+        uniqueCount: reranked.uniqueCount,
+        duplicateCount: reranked.duplicateCount,
+        eligibleCount: reranked.eligibleCount,
+        excludedByGap: reranked.excludedByGap,
+        bestSelectionScore: reranked.bestSelectionScore,
+        maxRelativeGap: reranked.maxRelativeGap,
+        maxAbsoluteGap: reranked.maxAbsoluteGap,
         evaluated: reranked.evaluated.map((candidate) => ({
           profile: candidate.profile,
           shapeScale: candidate.shapeScale,
