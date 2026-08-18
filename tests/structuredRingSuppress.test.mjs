@@ -52,7 +52,8 @@ const isolatedFinishers = {
   shapeGhost: false,
   centerSeam: false,
   localToneMatch: false,
-  outerHalo: false
+  outerHalo: false,
+  evidenceRefinement: false
 };
 
 test('structured ring suppression never accepts a materially worse candidate', () => {
@@ -60,8 +61,8 @@ test('structured ring suppression never accepts a materially worse candidate', (
   const alpha = diamondAlpha(width, height);
   const damaged = ringDamaged(width, height, alpha);
   const before = measureStructuredRingResidual(damaged, alpha);
-  // This test intentionally isolates the ring pass. Later finishers have their
-  // own dedicated safety and runtime-integration coverage.
+  // This test intentionally isolates the ring pass. Later finishers and evidence
+  // refinement have their own dedicated safety and runtime-integration coverage.
   const result = applyStructuredResidualRingSuppression(damaged, alpha, {
     ...isolatedFinishers,
     totalThreshold: 0.10,
