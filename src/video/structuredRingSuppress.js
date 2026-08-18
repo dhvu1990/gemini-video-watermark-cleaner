@@ -186,6 +186,59 @@ function applyStructuredRingPass(image, alphaMap, strength = 0.50) {
   return { image: { width: image.width, height: image.height, data: out }, correctedPixels, meanBlend: correctedPixels ? blendSum / correctedPixels : 0, meanAbsLumaDelta: correctedPixels ? deltaSum / correctedPixels : 0 };
 }
 
+function applyEvidenceGatedRefinement(image, alphaMap, options = {}) {
+  const enabled = options.evidenceRefinement !== false;
+  const minScore = Number.isFinite(options.refinementMinScore) ? options.refinementMinScore : 1.75;
+  const minDensity = Number.isFinite(options.refinementMinDensity) ? options.refinementMinDensity : 0.012;
+  const strength = clamp(Number(options.refinementStrength ?? 0.18), 0.08, 0.30);
+  const beforeAligned = measureStructuredRingResidual(image, alphaMap);
+  const density = alphaMap.length ? beforeAligned.samples / alphaMap.length : 0;
+  const attempted = enabled && beforeAligned.score >= minScore && density >= minDensity;
+  const state = {
+    enabled,
+    attempted,
+    accepted: false,
+    minScore,
+    minDensity,
+    strength,
+    density,
+    beforeAligned,
+    candidateAlignedAfter: beforeAligned,
+    beforeGlobal: null,
+    candidateGlobalAfter: null,
+    correctedPixels: 0,
+    meanBlend: 0,
+    meanAbsLumaDelta: 0
+  };
+  if (!attempted) return { image, state };
+
+  const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
+  const pass = applyStructuredRingPass(image, alphaMap, strength);
+  const candidateAlignedAfter = measureStructuredRingResidual(pass.image, alphaMap);
+  const candidateGlobalAfter = measurePostCleanupResidual(pass.image, alphaMap);
+  const alignedImprovement = beforeAligned.score > 1e-6
+    ? (beforeAligned.score - candidateAlignedAfter.score) / beforeAligned.score
+    : 0;
+  const accepted = pass.correctedPixels > 0
+    && alignedImprovement >= 0.015
+    && candidateAlignedAfter.score <= beforeAligned.score * 0.985
+    && candidateGlobalAfter.total <= beforeGlobal.total * 1.002
+    && candidateGlobalAfter.luma <= beforeGlobal.luma * 1.004
+    && candidateGlobalAfter.chroma <= beforeGlobal.chroma * 1.004;
+  Object.assign(state, {
+    accepted,
+    beforeGlobal,
+    candidateGlobalAfter,
+    candidateAlignedAfter,
+    alignedImprovement: accepted ? alignedImprovement : 0,
+    correctedPixels: accepted ? pass.correctedPixels : 0,
+    candidatePixels: pass.correctedPixels,
+    meanBlend: accepted ? pass.meanBlend : 0,
+    meanAbsLumaDelta: accepted ? pass.meanAbsLumaDelta : 0
+  });
+  return { image: accepted ? pass.image : image, state };
+}
+
 function finishWithShapeGhost(image, alphaMap, options) {
   if (options.shapeGhost === false) {
     return { width: image.width, height: image.height, data: image.data, shapeGhost: { enabled: false, attempted: false, accepted: false } };
@@ -252,6 +305,12 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     const haloResult = finishWithOuterHalo(selected, alphaMap, options);
     const outerHalo = haloResult.outerHalo || { enabled: true, attempted: true, accepted: false };
     if (outerHalo.accepted) selected = { width: haloResult.width, height: haloResult.height, data: haloResult.data };
+    const refinement = {
+      enabled: options.evidenceRefinement !== false,
+      attempted: false,
+      accepted: false,
+      reason: 'primary-gate-not-triggered'
+    };
     let acceptedMode = shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none');
     acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
     acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
@@ -273,6 +332,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
         correctedPixels: 0,
         salvageAttempted: false,
         salvageAccepted: false,
+        refinement,
         consensus,
         shapeGhost,
         centerSeam,
@@ -345,12 +405,17 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   const outerHalo = haloResult.outerHalo || { enabled: true, attempted: true, accepted: false };
   if (outerHalo.accepted) selected = { width: haloResult.width, height: haloResult.height, data: haloResult.data };
 
+  const refinementResult = applyEvidenceGatedRefinement(selected, alphaMap, options);
+  const refinement = refinementResult.state;
+  if (refinement.accepted) selected = refinementResult.image;
+
   let acceptedMode = shapeGhost.accepted
     ? (accepted ? 'primary+shape-ghost' : (salvageAccepted ? 'micro-salvage+shape-ghost' : (consensus.accepted ? 'consensus+shape-ghost' : 'shape-ghost')))
     : (accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')));
   acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
   acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
   acceptedMode = appendMode(acceptedMode, 'outer-halo', outerHalo.accepted);
+  acceptedMode = appendMode(acceptedMode, 'evidence-refine', refinement.accepted);
 
   return {
     width: selected.width,
@@ -359,7 +424,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     structuredRing: {
       enabled: true,
       attempted: true,
-      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted,
+      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted || refinement.accepted,
       ringAccepted,
       acceptedMode,
       before,
@@ -380,6 +445,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       salvageCandidateAlignedAfter,
       salvageCandidatePixels,
       salvageNearMissRatio: nearMissRatio,
+      refinement,
       consensus,
       shapeGhost,
       centerSeam,
