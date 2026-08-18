@@ -128,3 +128,39 @@ test('temporal donor skips static frames where the donor is still watermarked', 
   const repaired = applyTemporalDonorRepair(processed, current, current, alpha, 0.8);
   assert.equal(mae(repaired, processed), 0);
 });
+
+test('temporal donor local-structure guard suppresses a locally inconsistent donor streak', () => {
+  const width = 48, height = 48;
+  const cleanPrevious = image(width, height, (x, y) => {
+    const edge = x >= 32 ? 188 : 72;
+    const texture = (y % 4) * 3;
+    return [edge + texture, edge + texture, edge + texture];
+  });
+  const current = image(width, height, (x, y) => {
+    const sx = Math.min(width - 1, x + 4);
+    const i = (y * width + sx) * 4;
+    return [cleanPrevious.data[i], cleanPrevious.data[i + 1], cleanPrevious.data[i + 2]];
+  });
+  const previous = { width, height, data: new Uint8ClampedArray(cleanPrevious.data) };
+  for (let y = 16; y <= 32; y++) {
+    for (let x = 31; x <= 35; x++) {
+      const i = (y * width + x) * 4;
+      const value = y >= 24 ? 225 : 38;
+      previous.data[i] = value;
+      previous.data[i + 1] = value;
+      previous.data[i + 2] = value;
+    }
+  }
+  const alpha = new Float32Array(width * height);
+  for (let y = 17; y <= 30; y++) for (let x = 17; x <= 30; x++) alpha[y * width + x] = 0.22;
+  const processed = { width, height, data: new Uint8ClampedArray(current.data) };
+
+  const guarded = applyTemporalDonorRepair(processed, current, previous, alpha, 0.92);
+  const unguarded = applyTemporalDonorRepair(processed, current, previous, alpha, 0.92, { structureGuard: false });
+
+  assert.equal(guarded.temporalShift.dx, 4);
+  assert.ok(guarded.temporalDonor.candidatePixels > 0);
+  assert.ok(guarded.temporalDonor.guardedPixels > 0);
+  assert.ok(guarded.temporalDonor.meanStructureConfidence < 1);
+  assert.ok(mae(guarded, processed) < mae(unguarded, processed), 'guard should reduce donor-induced distortion');
+});

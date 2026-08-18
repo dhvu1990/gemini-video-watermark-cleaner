@@ -242,7 +242,48 @@ export function estimateTemporalShift(current, previous, alphaMap, radius = 7) {
   return { ...best, zeroError: zero, improvement: zero > 0 ? clamp((zero - best.error) / zero, 0, 1) : 0 };
 }
 
-export function applyTemporalDonorRepair(processed, currentOriginal, previousOriginal, alphaMap, strength = 0.62) {
+function localGradient(image, x, y) {
+  if (!image || x <= 0 || y <= 0 || x >= image.width - 1 || y >= image.height - 1) return null;
+  const left = (y * image.width + x - 1) * 4;
+  const right = (y * image.width + x + 1) * 4;
+  const up = ((y - 1) * image.width + x) * 4;
+  const down = ((y + 1) * image.width + x) * 4;
+  const gx = (luma(image.data, right) - luma(image.data, left)) * 0.5;
+  const gy = (luma(image.data, down) - luma(image.data, up)) * 0.5;
+  return { gx, gy, magnitude: Math.hypot(gx, gy) };
+}
+
+function temporalStructureConfidence(processed, donorImage, x, y, sx, sy, options = {}) {
+  if (options.structureGuard === false) return { confidence: 1, mismatch: 0, structured: false };
+  const current = localGradient(processed, x, y);
+  const donor = localGradient(donorImage, sx, sy);
+  if (!current || !donor) return { confidence: 1, mismatch: 0, structured: false };
+
+  const maxMagnitude = Math.max(current.magnitude, donor.magnitude);
+  const structure = smoothstep(
+    Number.isFinite(options.structureSoft) ? options.structureSoft : 10,
+    Number.isFinite(options.structureHard) ? options.structureHard : 38,
+    maxMagnitude
+  );
+  if (structure <= 0.001) return { confidence: 1, mismatch: 0, structured: false };
+
+  const denominator = Math.max(1e-6, current.magnitude * donor.magnitude);
+  const alignment = denominator > 1e-5
+    ? Math.abs((current.gx * donor.gx + current.gy * donor.gy) / denominator)
+    : 0;
+  const directionMismatch = 1 - clamp(alignment, 0, 1);
+  const magnitudeMismatch = Math.abs(current.magnitude - donor.magnitude) / Math.max(12, maxMagnitude);
+  const mismatch = clamp(directionMismatch * 0.70 + magnitudeMismatch * 0.45, 0, 1);
+  const mismatchGate = smoothstep(
+    Number.isFinite(options.mismatchSoft) ? options.mismatchSoft : 0.28,
+    Number.isFinite(options.mismatchHard) ? options.mismatchHard : 0.78,
+    mismatch
+  );
+  const confidence = clamp(1 - mismatchGate * structure * 0.88, 0.12, 1);
+  return { confidence, mismatch, structured: structure > 0.12 };
+}
+
+export function applyTemporalDonorRepair(processed, currentOriginal, previousOriginal, alphaMap, strength = 0.62, options = {}) {
   const safeStrength = clamp(Number(strength) || 0, 0, 1);
   if (safeStrength <= 0 || !previousOriginal || alphaMap.length !== processed.width * processed.height) return processed;
   const shift = estimateTemporalShift(currentOriginal, previousOriginal, alphaMap, 7);
@@ -251,6 +292,11 @@ export function applyTemporalDonorRepair(processed, currentOriginal, previousOri
   const out = new Uint8ClampedArray(processed.data);
   const support = clamp(shift.improvement * 2.4, 0, 1);
   const hybridMask = buildHybridRepairMask(alphaMap, processed.width, processed.height);
+  let candidatePixels = 0;
+  let correctedPixels = 0;
+  let guardedPixels = 0;
+  let structureConfidenceSum = 0;
+  let structureMismatchSum = 0;
   for (let y = 0; y < processed.height; y++) {
     for (let x = 0; x < processed.width; x++) {
       const p = y * processed.width + x;
@@ -267,10 +313,30 @@ export function applyTemporalDonorRepair(processed, currentOriginal, previousOri
       const featherWeight = hybridMask.feather[p] || 0;
       const coreWeight = hybridMask.core[p] || 0;
       const regionWeight = clamp(edgeWeight * 0.96 + featherWeight * 0.50 + coreWeight * 0.025, 0, 1);
-      const blend = Math.min(0.84, safeStrength * support * regionWeight);
+      if (regionWeight <= 0.01) continue;
+      candidatePixels++;
+      const structureMatch = temporalStructureConfidence(processed, previousOriginal, x, y, sx, sy, options);
+      structureConfidenceSum += structureMatch.confidence;
+      structureMismatchSum += structureMatch.mismatch;
+      if (structureMatch.confidence < 0.72) guardedPixels++;
+      const blend = Math.min(0.84, safeStrength * support * regionWeight * structureMatch.confidence);
       if (blend < 0.035) continue;
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(processed.data[idx + c] * (1 - blend) + previousOriginal.data[donor + c] * blend);
+      correctedPixels++;
     }
   }
-  return { width: processed.width, height: processed.height, data: out, temporalShift: shift };
+  return {
+    width: processed.width,
+    height: processed.height,
+    data: out,
+    temporalShift: shift,
+    temporalDonor: {
+      structureGuardEnabled: options.structureGuard !== false,
+      candidatePixels,
+      correctedPixels,
+      guardedPixels,
+      meanStructureConfidence: candidatePixels ? structureConfidenceSum / candidatePixels : 1,
+      meanStructureMismatch: candidatePixels ? structureMismatchSum / candidatePixels : 0
+    }
+  };
 }
