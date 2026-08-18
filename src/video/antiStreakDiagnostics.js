@@ -42,6 +42,7 @@ export function summarizeAntiStreakDiagnostics({
     && alignedSampleDensity >= ACCEPTED_LOW_GAIN_MIN_DENSITY
     && alignedImprovement < ACCEPTED_LOW_GAIN_MAX_IMPROVEMENT
   );
+  const downstreamRollback = Boolean(ring.downstreamGuard?.rollback);
 
   const riskFlags = [];
   if (attempted && !accepted) riskFlags.push('temporal-donor-rejected');
@@ -52,6 +53,7 @@ export function summarizeAntiStreakDiagnostics({
     riskFlags.push('structured-cleanup-low-gain');
   }
   if (acceptedStructuredLowGain) riskFlags.push('accepted-structured-low-gain');
+  if (downstreamRollback) riskFlags.push('structured-downstream-rollback');
 
   return {
     temporalDonor: {
@@ -85,6 +87,7 @@ export function summarizeAntiStreakDiagnostics({
       alignedAfterScore,
       alignedSampleDensity,
       alignedImprovement,
+      downstreamGuard: ring.downstreamGuard || null,
       consensusAccepted: Boolean(ring.consensus?.accepted),
       shapeGhostAccepted: Boolean(ring.shapeGhost?.accepted),
       centerSeamAccepted: Boolean(ring.centerSeam?.accepted),

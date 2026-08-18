@@ -2,8 +2,9 @@ import { buildHybridRepairMask } from './textureRepair.js';
 import { analyzeSmoothBackground, applySmoothBackgroundReconstruction } from './smoothBackground.js';
 import { stabilizeSmoothBackgroundMode } from './adaptiveFinish.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
-import { applyStructuredResidualRingSuppression } from './structuredRingSuppress.js';
+import { applyStructuredResidualRingSuppression, measureStructuredRingResidual } from './structuredRingSuppress.js';
 import { summarizeStructuredRingDiagnostics } from './structuredRingDiagnostics.js';
+import { evaluateStructuredDownstreamGuard } from './structuredDownstreamGuard.js';
 import { applySafeEmptyZoneHardSuppression } from './emptyZoneHardSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -248,6 +249,22 @@ function applyInnerStructureBreaker(image, alphaMap, strength = 0.34) {
   return { image: { width, height, data: out }, correctedPixels, meanAbsLumaDelta: correctedPixels ? deltaSum / correctedPixels : 0 };
 }
 
+function structuredDownstreamAccepted(structuredRing = {}) {
+  return Boolean(
+    structuredRing?.shapeGhost?.accepted
+    || structuredRing?.centerSeam?.accepted
+    || structuredRing?.localToneMatch?.accepted
+    || structuredRing?.outerHalo?.accepted
+    || structuredRing?.refinement?.accepted
+  );
+}
+
+function ringAlignedImprovement(structuredRing = {}) {
+  const before = Number(structuredRing?.alignedBefore?.score) || 0;
+  const after = Number(structuredRing?.alignedAfter?.score) || before;
+  return before > 1e-9 ? (before - after) / before : 0;
+}
+
 export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
   const strength = clamp(Number(options.strength ?? 0.56), 0, 1);
   if (strength <= 0 || alphaMap.length !== image.width * image.height) return image;
@@ -314,14 +331,98 @@ export function applyDualRingLumaFinish(image, alphaMap, options = {}) {
       }
     }
   } else if (decision.mode === 'structured' && options.structuredRing !== false) {
-    const structuredCandidate = applyStructuredResidualRingSuppression(selected, alphaMap, {
+    const structuredInput = selected;
+    const structuredOptions = {
       enabled: true,
       strength: options.structuredRingStrength ?? 0.50,
       totalThreshold: options.structuredRingTotalThreshold ?? 0.80,
       lumaThreshold: options.structuredRingLumaThreshold ?? 1.35
-    });
+    };
+    const structuredCandidate = applyStructuredResidualRingSuppression(structuredInput, alphaMap, structuredOptions);
     selected = { width: structuredCandidate.width, height: structuredCandidate.height, data: structuredCandidate.data };
     structuredRing = structuredCandidate.structuredRing || structuredRing;
+
+    const alignedBeforeScore = Number(structuredRing?.alignedBefore?.score) || 0;
+    const alignedBaselineScore = Number(structuredRing?.alignedAfter?.score) || alignedBeforeScore;
+    const alignedSampleDensity = alphaMap.length
+      ? Math.min(1, Math.max(0, Number(structuredRing?.alignedBefore?.samples || 0) / alphaMap.length))
+      : 0;
+    const downstreamAccepted = structuredDownstreamAccepted(structuredRing);
+    const probe = evaluateStructuredDownstreamGuard({
+      ringAccepted: Boolean(structuredRing?.ringAccepted),
+      alignedBeforeScore,
+      alignedBaselineScore,
+      alignedSampleDensity,
+      alignedImprovement: ringAlignedImprovement(structuredRing),
+      baselineGlobal: structuredRing?.after || structuredRing?.before,
+      finalAligned: structuredRing?.alignedAfter,
+      finalGlobal: structuredRing?.after || structuredRing?.before,
+      downstreamAccepted
+    }, options.structuredDownstreamGuardOptions || {});
+
+    let downstreamGuard = {
+      ...probe,
+      replayedBaseline: false,
+      rolledBackMode: 'none',
+      baselineAligned: structuredRing?.alignedAfter || null,
+      finalAligned: measureStructuredRingResidual(selected, alphaMap),
+      baselineGlobal: structuredRing?.after || null,
+      finalGlobal: measurePostCleanupResidual(selected, alphaMap)
+    };
+
+    if (probe.eligible) {
+      const baselineCandidate = applyStructuredResidualRingSuppression(structuredInput, alphaMap, {
+        ...structuredOptions,
+        shapeGhost: false,
+        centerSeam: false,
+        localToneMatch: false,
+        outerHalo: false,
+        evidenceRefinement: false
+      });
+      const baselineImage = { width: baselineCandidate.width, height: baselineCandidate.height, data: baselineCandidate.data };
+      const baselineRing = baselineCandidate.structuredRing || {};
+      const baselineAligned = measureStructuredRingResidual(baselineImage, alphaMap);
+      const baselineGlobal = measurePostCleanupResidual(baselineImage, alphaMap);
+      const finalAligned = measureStructuredRingResidual(selected, alphaMap);
+      const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
+      const evaluated = evaluateStructuredDownstreamGuard({
+        ringAccepted: Boolean(baselineRing?.ringAccepted),
+        alignedBeforeScore: Number(baselineRing?.alignedBefore?.score) || alignedBeforeScore,
+        alignedBaselineScore: baselineAligned.score,
+        alignedSampleDensity,
+        alignedImprovement: ringAlignedImprovement(baselineRing),
+        baselineGlobal,
+        finalAligned,
+        finalGlobal,
+        downstreamAccepted
+      }, options.structuredDownstreamGuardOptions || {});
+      downstreamGuard = {
+        ...evaluated,
+        replayedBaseline: true,
+        rolledBackMode: evaluated.rollback ? (structuredRing.acceptedMode || 'none') : 'none',
+        baselineAligned,
+        finalAligned,
+        baselineGlobal,
+        finalGlobal
+      };
+      if (evaluated.rollback) {
+        selected = baselineImage;
+        structuredRing = {
+          ...baselineRing,
+          downstreamGuard
+        };
+      } else {
+        structuredRing = {
+          ...structuredRing,
+          downstreamGuard
+        };
+      }
+    } else {
+      structuredRing = {
+        ...structuredRing,
+        downstreamGuard
+      };
+    }
     smoothBackground = { ...smoothBackground, structuredRing };
   }
 
