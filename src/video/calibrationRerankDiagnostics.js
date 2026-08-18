@@ -14,6 +14,13 @@ function candidateIdentity(candidate = {}) {
   };
 }
 
+function sameCandidateIdentity(left, right) {
+  if (!left || !right) return false;
+  const a = candidateIdentity(left);
+  const b = candidateIdentity(right);
+  return Object.keys(a).every((key) => a[key] === b[key]);
+}
+
 export function summarizeCalibrationRerank(reranked = {}) {
   const evaluated = Array.isArray(reranked.evaluated) ? reranked.evaluated : [];
   const selected = reranked.selected || null;
@@ -41,7 +48,7 @@ export function summarizeCalibrationRerank(reranked = {}) {
     maxRelativeGap: finiteOr(reranked.maxRelativeGap, 0),
     maxAbsoluteGap: finiteOr(reranked.maxAbsoluteGap, 0),
     minCoverage: finiteOr(reranked.minCoverage, 0),
-    selectedChangedFromBase: Boolean(selected && baseWinner && selected !== baseWinner),
+    selectedChangedFromBase: Boolean(selected && baseWinner && !sameCandidateIdentity(selected, baseWinner)),
     selectedBaseScore,
     selectedFinalScore,
     selectedArtifactPenalty: Math.max(0, selectedFinalScore - selectedBaseScore),
