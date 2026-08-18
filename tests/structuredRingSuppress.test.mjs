@@ -47,17 +47,23 @@ function ringDamaged(width, height, alpha) {
   });
 }
 
+const isolatedFinishers = {
+  consensus: false,
+  shapeGhost: false,
+  centerSeam: false,
+  localToneMatch: false,
+  outerHalo: false
+};
+
 test('structured ring suppression never accepts a materially worse candidate', () => {
   const width = 51, height = 51;
   const alpha = diamondAlpha(width, height);
   const damaged = ringDamaged(width, height, alpha);
   const before = measureStructuredRingResidual(damaged, alpha);
-  // This test intentionally isolates the ring pass. Consensus, shape-ghost and
-  // center-seam finishing are covered by their own safety/integration tests.
+  // This test intentionally isolates the ring pass. Later finishers have their
+  // own dedicated safety and runtime-integration coverage.
   const result = applyStructuredResidualRingSuppression(damaged, alpha, {
-    consensus: false,
-    shapeGhost: false,
-    centerSeam: false,
+    ...isolatedFinishers,
     totalThreshold: 0.10,
     lumaThreshold: 0.10,
     strength: 0.58
@@ -83,9 +89,7 @@ test('micro-salvage candidate is accepted only when final residual stays safer t
   const alpha = diamondAlpha(width, height);
   const damaged = ringDamaged(width, height, alpha);
   const result = applyStructuredResidualRingSuppression(damaged, alpha, {
-    consensus: false,
-    shapeGhost: false,
-    centerSeam: false,
+    ...isolatedFinishers,
     totalThreshold: 0.10,
     lumaThreshold: 0.10,
     strength: 0.72,
@@ -110,9 +114,7 @@ test('low-residual structured region skips the suppression pass', () => {
   const alpha = diamondAlpha(width, height);
   const clean = image(width, height, (x, y) => [82 + x, 104 + Math.floor(y * 0.7), 142 + ((x + y) % 3)]);
   const result = applyStructuredResidualRingSuppression(clean, alpha, {
-    consensus: false,
-    shapeGhost: false,
-    centerSeam: false,
+    ...isolatedFinishers,
     totalThreshold: 999,
     lumaThreshold: 999
   });
