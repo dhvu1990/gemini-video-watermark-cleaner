@@ -48,3 +48,35 @@ test('top-N reranking evaluates only the small leading candidate subset and can 
   assert.equal(result.selected.id, 'b');
   assert.ok(result.selected.finalScore < result.evaluated.find((item) => item.id === 'a').finalScore);
 });
+
+test('duplicate calibration identities do not consume top-N artifact evaluation slots', async () => {
+  const candidates = [
+    {
+      id: 'coarse-best', selectionScore: 5.00, profile: '96-20260520', shapeScale: 1,
+      edgeBoost: 0.03, edgeGain: 1, offsetX: 0, offsetY: 0, bodyGain: 1
+    },
+    {
+      id: 'subpixel-center-duplicate', selectionScore: 5.00, profile: '96-20260520', shapeScale: 1,
+      edgeBoost: 0.03, edgeGain: 1, offsetX: 0, offsetY: 0, bodyGain: 1
+    },
+    {
+      id: 'offset-left', selectionScore: 5.02, profile: '96-20260520', shapeScale: 1,
+      edgeBoost: 0.03, edgeGain: 1, offsetX: -0.4, offsetY: 0, bodyGain: 1
+    },
+    {
+      id: 'offset-right', selectionScore: 5.03, profile: '96-20260520', shapeScale: 1,
+      edgeBoost: 0.03, edgeGain: 1, offsetX: 0.4, offsetY: 0, bodyGain: 1
+    }
+  ];
+  const calls = [];
+  const result = await rerankCalibrationCandidates(candidates, async (candidate) => {
+    calls.push(candidate.id);
+    return { score: 0, coverage: 0 };
+  }, { topN: 3 });
+
+  assert.deepEqual(calls, ['coarse-best', 'offset-left', 'offset-right']);
+  assert.equal(result.inputCount, 4);
+  assert.equal(result.uniqueCount, 3);
+  assert.equal(result.duplicateCount, 1);
+  assert.equal(result.topN, 3);
+});
