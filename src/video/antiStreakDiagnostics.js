@@ -1,3 +1,7 @@
+const ACCEPTED_LOW_GAIN_MIN_SCORE = 1.45;
+const ACCEPTED_LOW_GAIN_MIN_DENSITY = 0.03;
+const ACCEPTED_LOW_GAIN_MAX_IMPROVEMENT = 0.08;
+
 function finiteOr(value, fallback = 0) {
   return Number.isFinite(Number(value)) ? Number(value) : fallback;
 }
@@ -27,6 +31,17 @@ export function summarizeAntiStreakDiagnostics({
   const alignedBeforeScore = Math.max(0, finiteOr(ring.alignedBeforeScore, 0));
   const alignedAfterScore = Math.max(0, finiteOr(ring.alignedAfterScore, alignedBeforeScore));
   const alignedSampleDensity = clamp01(ring.alignedSampleDensity);
+  const derivedAlignedImprovement = alignedBeforeScore > 1e-6
+    ? Math.max(-1, Math.min(1, (alignedBeforeScore - alignedAfterScore) / alignedBeforeScore))
+    : 0;
+  const alignedImprovement = finiteOr(ring.alignedImprovement, derivedAlignedImprovement);
+  const acceptedStructuredLowGain = Boolean(
+    ring.attempted
+    && ring.accepted
+    && alignedBeforeScore >= ACCEPTED_LOW_GAIN_MIN_SCORE
+    && alignedSampleDensity >= ACCEPTED_LOW_GAIN_MIN_DENSITY
+    && alignedImprovement < ACCEPTED_LOW_GAIN_MAX_IMPROVEMENT
+  );
 
   const riskFlags = [];
   if (attempted && !accepted) riskFlags.push('temporal-donor-rejected');
@@ -36,6 +51,7 @@ export function summarizeAntiStreakDiagnostics({
   if (ring.attempted && !ring.accepted && alignedAfterScore >= alignedBeforeScore * 0.985) {
     riskFlags.push('structured-cleanup-low-gain');
   }
+  if (acceptedStructuredLowGain) riskFlags.push('accepted-structured-low-gain');
 
   return {
     temporalDonor: {
@@ -64,10 +80,11 @@ export function summarizeAntiStreakDiagnostics({
       attempted: Boolean(ring.attempted),
       accepted: Boolean(ring.accepted),
       acceptedMode: ring.acceptedMode || 'none',
+      acceptedLowGain: acceptedStructuredLowGain,
       alignedBeforeScore,
       alignedAfterScore,
       alignedSampleDensity,
-      alignedImprovement: finiteOr(ring.alignedImprovement, 0),
+      alignedImprovement,
       consensusAccepted: Boolean(ring.consensus?.accepted),
       shapeGhostAccepted: Boolean(ring.shapeGhost?.accepted),
       centerSeamAccepted: Boolean(ring.centerSeam?.accepted),
