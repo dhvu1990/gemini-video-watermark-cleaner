@@ -54,6 +54,15 @@ function makeFrame(width, height, shiftX = 0, shiftY = 0, watermark = false, alp
   return { width, height, data };
 }
 
+function offsetFrame(frame, delta) {
+  const out = { width: frame.width, height: frame.height, data: new Uint8ClampedArray(frame.data) };
+  for (let p = 0; p < frame.width * frame.height; p++) {
+    const idx = p * 4;
+    for (let c = 0; c < 3; c++) out.data[idx + c] = Math.max(0, Math.min(255, out.data[idx + c] + delta));
+  }
+  return out;
+}
+
 test('atlas shift estimates translated background from clean border pixels', () => {
   const width = 32, height = 32;
   const alpha = makeAlpha(width, height);
@@ -148,4 +157,35 @@ test('hybrid atlas changes edge ring much more than high-alpha core', () => {
   const edgeDelta = Math.abs(repaired.data[edgeP * 4] - processed.data[edgeP * 4]);
   assert.ok(edgeDelta > centerDelta * 4 + 5);
   assert.ok(centerDelta <= 6);
+});
+
+test('donor disagreement lowers atlas confidence and is exposed in diagnostics', () => {
+  const width = 32, height = 32;
+  const alpha = makeAlpha(width, height, 10, 10, 10);
+  const current = makeFrame(width, height, 0, 0, true, alpha);
+  const coherent = [
+    makeFrame(width, height, 3, 0, false, alpha),
+    makeFrame(width, height, -3, 0, false, alpha),
+    makeFrame(width, height, 0, 3, false, alpha),
+    makeFrame(width, height, 0, -3, false, alpha)
+  ];
+  const inconsistent = coherent.map((frame, index) => offsetFrame(frame, [-60, -20, 30, 75][index]));
+
+  const stableAtlas = buildBackgroundAtlas(current, coherent, alpha, {
+    maxShift: 5,
+    minImprovement: 0.04,
+    allowMaskedDonors: true
+  });
+  const unstableAtlas = buildBackgroundAtlas(current, inconsistent, alpha, {
+    maxShift: 5,
+    minImprovement: 0.04,
+    allowMaskedDonors: true
+  });
+  const stable = summarizeAtlas(stableAtlas);
+  const unstable = summarizeAtlas(unstableAtlas);
+
+  assert.ok(unstable.meanDonorSpread > stable.meanDonorSpread + 8);
+  assert.ok(unstable.meanConfidence < stable.meanConfidence);
+  assert.equal(unstable.donorSpreadSoft, 10);
+  assert.equal(unstable.donorSpreadHard, 32);
 });

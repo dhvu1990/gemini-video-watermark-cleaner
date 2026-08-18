@@ -19,6 +19,11 @@ function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5;
 }
 
+function medianAbsoluteDeviation(values, center = median(values)) {
+  if (!values.length || center == null) return 0;
+  return median(values.map((value) => Math.abs(value - center))) || 0;
+}
+
 function sampleRgb(image, x, y) {
   if (!image || x < 0 || y < 0 || x >= image.width || y >= image.height) return null;
   const idx = (y * image.width + x) * 4;
@@ -100,6 +105,8 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
   const minImprovement = Number.isFinite(options.minImprovement) ? options.minImprovement : 0.08;
   const maxShift = Math.max(1, Math.min(12, Math.round(options.maxShift || 8)));
   const allowMaskedDonors = options.allowMaskedDonors === true;
+  const donorSpreadSoft = Number.isFinite(options.donorSpreadSoft) ? Math.max(0, options.donorSpreadSoft) : 10;
+  const donorSpreadHard = Number.isFinite(options.donorSpreadHard) ? Math.max(donorSpreadSoft + 1, options.donorSpreadHard) : 32;
   const donors = [];
 
   for (const donor of (history || []).slice(-maxHistory)) {
@@ -112,12 +119,14 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
   const data = new Uint8ClampedArray(current.data.length);
   const support = new Uint8Array(width * height);
   const confidence = new Float32Array(width * height);
+  const donorSpread = new Float32Array(width * height);
 
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const p = y * width + x;
       const channels = [[], [], []];
       const improvements = [];
+      const donorLuma = [];
       for (const donor of donors) {
         const sx = x + donor.shift.dx;
         const sy = y + donor.shift.dy;
@@ -127,13 +136,18 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
         channels[0].push(rgb[0]);
         channels[1].push(rgb[1]);
         channels[2].push(rgb[2]);
+        donorLuma.push(0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]);
         improvements.push(donor.shift.improvement);
       }
       const count = channels[0].length;
       if (!count) continue;
       support[p] = Math.min(255, count);
+      const lumaMedian = median(donorLuma);
+      const spread = medianAbsoluteDeviation(donorLuma, lumaMedian);
+      donorSpread[p] = spread;
+      const consistency = 1 - smoothstep(donorSpreadSoft, donorSpreadHard, spread);
       const maskedPenalty = allowMaskedDonors && (alphaMap[p] || 0) > 0.008 ? 0.82 : 1;
-      confidence[p] = clamp(((count / 4) * 0.7 + (median(improvements) || 0) * 0.3) * maskedPenalty, 0, 1);
+      confidence[p] = clamp(((count / 4) * 0.7 + (median(improvements) || 0) * 0.3) * maskedPenalty * consistency, 0, 1);
       const idx = p * 4;
       data[idx] = Math.round(median(channels[0]));
       data[idx + 1] = Math.round(median(channels[1]));
@@ -142,7 +156,19 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
     }
   }
 
-  return { width, height, data, support, confidence, donorCount: donors.length, donors, allowMaskedDonors };
+  return {
+    width,
+    height,
+    data,
+    support,
+    confidence,
+    donorSpread,
+    donorCount: donors.length,
+    donors,
+    allowMaskedDonors,
+    donorSpreadSoft,
+    donorSpreadHard
+  };
 }
 
 export function applyBackgroundAtlas(processed, alphaMap, atlas, strength = 0.92) {
@@ -171,20 +197,25 @@ export function applyBackgroundAtlas(processed, alphaMap, atlas, strength = 0.92
 }
 
 export function summarizeAtlas(atlas) {
-  if (!atlas) return { donorCount: 0, supportedPixels: 0, meanConfidence: 0 };
+  if (!atlas) return { donorCount: 0, supportedPixels: 0, meanConfidence: 0, meanDonorSpread: 0 };
   let supportedPixels = 0;
   let confidenceSum = 0;
+  let spreadSum = 0;
   const minSupport = atlas.allowMaskedDonors ? 3 : 2;
   for (let i = 0; i < atlas.support.length; i++) {
     if (atlas.support[i] >= minSupport) {
       supportedPixels++;
       confidenceSum += atlas.confidence[i] || 0;
+      spreadSum += atlas.donorSpread?.[i] || 0;
     }
   }
   return {
     donorCount: atlas.donorCount || 0,
     supportedPixels,
     meanConfidence: supportedPixels ? confidenceSum / supportedPixels : 0,
+    meanDonorSpread: supportedPixels ? spreadSum / supportedPixels : 0,
+    donorSpreadSoft: atlas.donorSpreadSoft ?? null,
+    donorSpreadHard: atlas.donorSpreadHard ?? null,
     allowMaskedDonors: Boolean(atlas.allowMaskedDonors)
   };
 }
