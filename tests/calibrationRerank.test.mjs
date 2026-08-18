@@ -14,9 +14,20 @@ test('artifact contribution stays lightly bounded relative to the base calibrati
   assert.equal(combined, 11);
 });
 
-test('zero coverage leaves the base calibration score unchanged', () => {
+test('artifact coverage below the default minimum leaves the base score unchanged', () => {
   const base = 4.25;
   assert.equal(combineCalibrationArtifactScore(base, { score: 12, coverage: 0 }), base);
+  assert.equal(combineCalibrationArtifactScore(base, { score: 12, coverage: 0.39 }), base);
+  assert.ok(combineCalibrationArtifactScore(base, { score: 12, coverage: 0.40 }) > base);
+});
+
+test('minimum artifact coverage can be explicitly disabled', () => {
+  const base = 6;
+  const combined = combineCalibrationArtifactScore(base, { score: 5, coverage: 0.10 }, {
+    minCoverage: 0,
+    artifactWeight: 0.055
+  });
+  assert.ok(combined > base);
 });
 
 test('top-N reranking evaluates only the small leading candidate subset and can prefer a cleaner near-tie', async () => {
@@ -47,8 +58,25 @@ test('top-N reranking evaluates only the small leading candidate subset and can 
   assert.equal(result.evaluated.length, 3);
   assert.equal(result.eligibleCount, 3);
   assert.equal(result.excludedByGap, 2);
+  assert.equal(result.minCoverage, 0.4);
   assert.equal(result.selected.id, 'b');
   assert.ok(result.selected.finalScore < result.evaluated.find((item) => item.id === 'a').finalScore);
+});
+
+test('low-coverage artifact metrics cannot flip a near-tie candidate', async () => {
+  const candidates = [
+    { id: 'base-winner', selectionScore: 10.00 },
+    { id: 'near-tie', selectionScore: 10.03 }
+  ];
+  const result = await rerankCalibrationCandidates(candidates, async (candidate) => {
+    if (candidate.id === 'base-winner') return { score: 0, coverage: 1 };
+    return { score: 100, coverage: 0.20 };
+  });
+
+  assert.equal(result.selected.id, 'base-winner');
+  const nearTie = result.evaluated.find((item) => item.id === 'near-tie');
+  assert.equal(nearTie.artifactCoverageEligible, false);
+  assert.equal(nearTie.finalScore, nearTie.selectionScore);
 });
 
 test('duplicate calibration identities do not consume top-N artifact evaluation slots', async () => {
