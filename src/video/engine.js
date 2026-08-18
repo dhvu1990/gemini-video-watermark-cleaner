@@ -25,6 +25,7 @@ import { applyBackgroundAtlas, buildBackgroundAtlas, summarizeAtlas } from './mu
 import { applyNormalEdgeBridge } from './edgeBridge.js';
 import { applyDualRingLumaFinish } from './dualRingFinish.js';
 import { evaluateTemporalDonorAcceptance } from './temporalDonorAcceptance.js';
+import { summarizeAntiStreakDiagnostics } from './antiStreakDiagnostics.js';
 
 const DEFAULT_COLOR_SPACE = { primaries: 'bt709', transfer: 'bt709', matrix: 'bt709', fullRange: false };
 const REPAIR_PADDING = 14;
@@ -142,6 +143,12 @@ export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePo
   repaired = applyNormalEdgeBridge(repaired, paddedAlpha, 0.90);
   const edgeBridge = repaired.edgeBridge || null;
   repaired = applyDualRingLumaFinish(repaired, paddedAlpha, { strength: 0.56 });
+  const antiStreakDiagnostics = summarizeAntiStreakDiagnostics({
+    temporalDonorAcceptance,
+    temporalDonor: temporalDonorAcceptance.temporalDonor || null,
+    atlas: atlasSummary,
+    structuredRingDiagnostics: repaired.structuredRingDiagnostics || repaired.dualRingFinish?.structuredRingDiagnostics || null
+  });
   return {
     original,
     cleaned: cropRegion(repaired, inner.offsetX, inner.offsetY, inner.width, inner.height),
@@ -149,6 +156,7 @@ export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePo
     paddedAlpha,
     atlasSummary,
     temporalDonorAcceptance,
+    antiStreakDiagnostics,
     edgeBridge,
     dualRingFinish: repaired.dualRingFinish || null
   };
@@ -169,6 +177,7 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     cleaned: repaired.cleaned,
     atlas: repaired.atlasSummary,
     temporalDonorAcceptance: repaired.temporalDonorAcceptance,
+    antiStreak: repaired.antiStreakDiagnostics,
     edgeBridge: repaired.edgeBridge,
     dualRingFinish: repaired.dualRingFinish
   };
@@ -291,6 +300,8 @@ export async function cleanVideo(file, options = {}) {
   let atlasFrames = 0, atlasDonorsPeak = 0, bridgeFrames = 0, bridgePixelsPeak = 0;
   let dualRingFrames = 0, dualRingPixelsPeak = 0, dualRingImprovementSum = 0;
   let temporalDonorAttemptedFrames = 0, temporalDonorAcceptedFrames = 0, temporalDonorRejectedFrames = 0;
+  let antiStreakRiskFrames = 0;
+  const antiStreakRiskFlagCounts = {};
   const lowGate = Number.isFinite(options.lowGate) ? options.lowGate : 0.025;
   const fallbackDuration = 1 / Math.max(1, metadata.frameRate);
   try {
@@ -319,6 +330,11 @@ export async function cleanVideo(file, options = {}) {
             temporalDonorAttemptedFrames++;
             if (repaired.temporalDonorAcceptance.accepted) temporalDonorAcceptedFrames++;
             else temporalDonorRejectedFrames++;
+          }
+          const riskFlags = repaired.antiStreakDiagnostics?.riskFlags || [];
+          if (riskFlags.length) {
+            antiStreakRiskFrames++;
+            for (const flag of riskFlags) antiStreakRiskFlagCounts[flag] = (antiStreakRiskFlagCounts[flag] || 0) + 1;
           }
           if (repaired.edgeBridge?.bridgedPixels > 0) { bridgeFrames++; bridgePixelsPeak = Math.max(bridgePixelsPeak, repaired.edgeBridge.bridgedPixels); }
           if (repaired.dualRingFinish?.correctedPixels > 0) {
@@ -356,6 +372,9 @@ export async function cleanVideo(file, options = {}) {
           bridgeFrames, bridgePixelsPeak, atlasFrames, atlasDonorsPeak, historyLimit: MAX_ATLAS_HISTORY,
           temporalDonorAcceptance: true,
           temporalDonorAttemptedFrames, temporalDonorAcceptedFrames, temporalDonorRejectedFrames,
+          antiStreakDiagnostics: true,
+          antiStreakRiskFrames,
+          antiStreakRiskFlagCounts,
           dualRingFrames, dualRingPixelsPeak,
           meanDualRingImprovement: dualRingFrames ? dualRingImprovementSum / dualRingFrames : 0
         },
