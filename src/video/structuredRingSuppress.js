@@ -3,6 +3,7 @@ import { measurePostCleanupResidual } from './edgeBridge.js';
 import { applyStructuredConsensusRepair } from './structuredConsensusRepair.js';
 import { applyShapeGhostSuppression } from './shapeGhostSuppress.js';
 import { applyCenterSeamSuppression } from './centerSeamSuppress.js';
+import { applyLocalToneMatch } from './localToneMatch.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -198,6 +199,13 @@ function finishWithCenterSeam(image, alphaMap, options) {
   return applyCenterSeamSuppression(image, alphaMap, { enabled: true, ...(options.centerSeamOptions || {}) });
 }
 
+function finishWithLocalTone(image, alphaMap, options) {
+  if (options.localToneMatch === false) {
+    return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), localToneMatch: { enabled: false, attempted: false, accepted: false } };
+  }
+  return applyLocalToneMatch(image, alphaMap, { enabled: true, ...(options.localToneOptions || {}) });
+}
+
 function appendMode(baseMode, suffix, accepted) {
   if (!accepted) return baseMode;
   return baseMode && baseMode !== 'none' ? `${baseMode}+${suffix}` : suffix;
@@ -230,8 +238,12 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     const seamResult = finishWithCenterSeam(selected, alphaMap, options);
     const centerSeam = seamResult.centerSeam || { enabled: true, attempted: true, accepted: false };
     if (centerSeam.accepted) selected = { width: seamResult.width, height: seamResult.height, data: seamResult.data };
+    const toneResult = finishWithLocalTone(selected, alphaMap, options);
+    const localToneMatch = toneResult.localToneMatch || { enabled: true, attempted: true, accepted: false };
+    if (localToneMatch.accepted) selected = { width: toneResult.width, height: toneResult.height, data: toneResult.data };
     let acceptedMode = shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none');
     acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
+    acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
     return {
       width: selected.width,
       height: selected.height,
@@ -239,7 +251,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       structuredRing: {
         enabled: true,
         attempted: false,
-        accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted,
+        accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted,
         acceptedMode,
         before,
         after: before,
@@ -251,7 +263,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
         salvageAccepted: false,
         consensus,
         shapeGhost,
-        centerSeam
+        centerSeam,
+        localToneMatch
       }
     };
   }
@@ -311,10 +324,15 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   const centerSeam = seamResult.centerSeam || { enabled: true, attempted: true, accepted: false };
   if (centerSeam.accepted) selected = { width: seamResult.width, height: seamResult.height, data: seamResult.data };
 
+  const toneResult = finishWithLocalTone(selected, alphaMap, options);
+  const localToneMatch = toneResult.localToneMatch || { enabled: true, attempted: true, accepted: false };
+  if (localToneMatch.accepted) selected = { width: toneResult.width, height: toneResult.height, data: toneResult.data };
+
   let acceptedMode = shapeGhost.accepted
     ? (accepted ? 'primary+shape-ghost' : (salvageAccepted ? 'micro-salvage+shape-ghost' : (consensus.accepted ? 'consensus+shape-ghost' : 'shape-ghost')))
     : (accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')));
   acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
+  acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
 
   return {
     width: selected.width,
@@ -323,7 +341,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     structuredRing: {
       enabled: true,
       attempted: true,
-      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted,
+      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted,
       ringAccepted,
       acceptedMode,
       before,
@@ -346,7 +364,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       salvageNearMissRatio: nearMissRatio,
       consensus,
       shapeGhost,
-      centerSeam
+      centerSeam,
+      localToneMatch
     }
   };
 }
