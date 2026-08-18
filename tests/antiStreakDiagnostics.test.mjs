@@ -72,6 +72,30 @@ test('accepted structured low-gain residual from real preview telemetry is flagg
   assert.ok(summary.riskFlags.includes('accepted-structured-low-gain'));
 });
 
+test('structured downstream rollback is surfaced as a risk flag', () => {
+  const summary = summarizeAntiStreakDiagnostics({
+    structuredRingDiagnostics: {
+      attempted: true,
+      accepted: true,
+      acceptedMode: 'primary',
+      alignedBeforeScore: 1.72,
+      alignedAfterScore: 1.635,
+      alignedSampleDensity: 0.048,
+      alignedImprovement: 0.049,
+      downstreamGuard: {
+        enabled: true,
+        eligible: true,
+        rollback: true,
+        reason: 'downstream-safety-gate'
+      }
+    }
+  });
+
+  assert.ok(summary.riskFlags.includes('accepted-structured-low-gain'));
+  assert.ok(summary.riskFlags.includes('structured-downstream-rollback'));
+  assert.equal(summary.structured.downstreamGuard.rollback, true);
+});
+
 test('accepted structured cleanup with healthy improvement stays quiet', () => {
   const summary = summarizeAntiStreakDiagnostics({
     structuredRingDiagnostics: {
