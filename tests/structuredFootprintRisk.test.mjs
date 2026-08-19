@@ -20,10 +20,10 @@ test('classifies dense low-continuity footprint evidence as strong', () => {
 
 test('classifies borderline multi-signal footprint evidence as suspect', () => {
   const risk = classifyStructuredFootprintRisk({
-    score: 0.92,
-    rawScore: 1.28,
-    coverage: 0.021,
-    shapeAlignedDensity: 0.009,
+    score: 1.00,
+    rawScore: 1.35,
+    coverage: 0.025,
+    shapeAlignedDensity: 0.010,
     continuityMean: 0.38,
     samples: 38,
     candidateSamples: 150
