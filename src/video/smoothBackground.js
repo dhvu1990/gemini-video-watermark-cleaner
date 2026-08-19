@@ -8,6 +8,16 @@ function smoothstep(edge0, edge1, value) {
 function lumaAt(data, index) {
   return 0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2];
 }
+function rgbToYcbcr(rgb) {
+  const y = 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  return [y, (rgb[2] - y) * 0.5389, (rgb[0] - y) * 0.6350];
+}
+function ycbcrToRgb(y, cb, cr) {
+  const r = y + cr / 0.6350;
+  const b = y + cb / 0.5389;
+  const g = (y - 0.2126 * r - 0.0722 * b) / 0.7152;
+  return [clampByte(r), clampByte(g), clampByte(b)];
+}
 
 function localMaxAlpha(alphaMap, width, height, x, y, radius = 2) {
   let max = 0;
@@ -97,6 +107,8 @@ export function fitSmoothBackgroundSurface(image, alphaMap) {
   let laplacianSum = 0;
   let gradientSamples = 0;
   let edgePixels = 0;
+  let cbSum = 0;
+  let crSum = 0;
 
   for (const sample of samples) {
     const { x, y, basis } = sample;
@@ -105,6 +117,9 @@ export function fitSmoothBackgroundSurface(image, alphaMap) {
       residualSum += Math.abs(data[index + channel] - evaluateSurface(coefficients, basis, channel));
       residualCount++;
     }
+    const exteriorYcc = rgbToYcbcr([data[index], data[index + 1], data[index + 2]]);
+    cbSum += exteriorYcc[1];
+    crSum += exteriorYcc[2];
     if (!exteriorSample(alphaMap, width, height, x - 1, y)
       || !exteriorSample(alphaMap, width, height, x + 1, y)
       || !exteriorSample(alphaMap, width, height, x, y - 1)
@@ -121,6 +136,23 @@ export function fitSmoothBackgroundSurface(image, alphaMap) {
     gradientSamples++;
     if (gradient >= 14) edgePixels++;
   }
+
+  const exteriorMeanCb = samples.length ? cbSum / samples.length : 0;
+  const exteriorMeanCr = samples.length ? crSum / samples.length : 0;
+  let chromaSpreadSum = 0;
+  for (const sample of samples) {
+    const index = (sample.y * width + sample.x) * 4;
+    const ycc = rgbToYcbcr([data[index], data[index + 1], data[index + 2]]);
+    chromaSpreadSum += Math.hypot(ycc[1] - exteriorMeanCb, ycc[2] - exteriorMeanCr);
+  }
+  const exteriorChromaSpread = samples.length ? chromaSpreadSum / samples.length : Number.POSITIVE_INFINITY;
+  const exteriorChromaMagnitude = Math.hypot(exteriorMeanCb, exteriorMeanCr);
+  const neutralChromaConfidence = clamp(
+    (1 - smoothstep(4.0, 12.0, exteriorChromaMagnitude))
+      * (1 - smoothstep(3.0, 10.0, exteriorChromaSpread)),
+    0,
+    1
+  );
 
   let coreSamples = 0;
   let coreStructure = 0;
@@ -172,7 +204,12 @@ export function fitSmoothBackgroundSurface(image, alphaMap) {
     meanLaplacian,
     edgeDensity,
     coreStructureDensity,
-    complexity
+    complexity,
+    exteriorMeanCb,
+    exteriorMeanCr,
+    exteriorChromaMagnitude,
+    exteriorChromaSpread,
+    neutralChromaConfidence
   };
 }
 
@@ -287,9 +324,16 @@ export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, o
   const strength = clamp(Number(options.strength ?? 0.995), 0, 1);
   const featherMask = buildFeatherMask(alphaMap, image.width, image.height, options.dilationRadius ?? 4);
   const out = new Uint8ClampedArray(image.data);
+  const neutralGuardEnabled = options.neutralChromaGuard !== false;
+  const neutralConfidence = neutralGuardEnabled ? clamp(Number(analysis.neutralChromaConfidence) || 0, 0, 1) : 0;
+  const neutralGuardStrength = smoothstep(0.48, 0.88, neutralConfidence) * clamp(Number(options.neutralChromaStrength ?? 0.78), 0, 0.90);
+  const neutralCb = Number(analysis.exteriorMeanCb) || 0;
+  const neutralCr = Number(analysis.exteriorMeanCr) || 0;
   let replacedPixels = 0;
   let blendSum = 0;
   let maxBlend = 0;
+  let neutralGuardPixels = 0;
+  let chromaCorrectionSum = 0;
 
   for (let y = 0; y < image.height; y++) {
     for (let x = 0; x < image.width; x++) {
@@ -302,9 +346,21 @@ export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, o
       if (blend < 0.02) continue;
       const basis = normalizedBasis(x, y, image.width, image.height);
       const idx = p * 4;
+      let predicted = [0, 1, 2].map((channel) => clampByte(evaluateSurface(analysis.coefficients, basis, channel)));
+      if (neutralGuardStrength > 0.01) {
+        const predictedYcc = rgbToYcbcr(predicted);
+        const localGuard = neutralGuardStrength * clamp(mask * 0.78 + bodyBoost * 0.22, 0, 1);
+        const guardedCb = predictedYcc[1] + (neutralCb - predictedYcc[1]) * localGuard;
+        const guardedCr = predictedYcc[2] + (neutralCr - predictedYcc[2]) * localGuard;
+        const correction = Math.hypot(guardedCb - predictedYcc[1], guardedCr - predictedYcc[2]);
+        if (correction > 0.08) {
+          predicted = ycbcrToRgb(predictedYcc[0], guardedCb, guardedCr);
+          neutralGuardPixels++;
+          chromaCorrectionSum += correction;
+        }
+      }
       for (let c = 0; c < 3; c++) {
-        const predicted = clampByte(evaluateSurface(analysis.coefficients, basis, c));
-        out[idx + c] = clampByte(image.data[idx + c] * (1 - blend) + predicted * blend);
+        out[idx + c] = clampByte(image.data[idx + c] * (1 - blend) + predicted[c] * blend);
       }
       replacedPixels++;
       blendSum += blend;
@@ -334,6 +390,12 @@ export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, o
       meanLaplacian: analysis.meanLaplacian,
       coreStructureDensity: analysis.coreStructureDensity,
       sampleCount: analysis.sampleCount,
+      exteriorChromaMagnitude: analysis.exteriorChromaMagnitude,
+      exteriorChromaSpread: analysis.exteriorChromaSpread,
+      neutralChromaConfidence: neutralConfidence,
+      neutralChromaGuardApplied: neutralGuardPixels > 0,
+      neutralChromaGuardPixels: neutralGuardPixels,
+      meanChromaCorrection: neutralGuardPixels ? chromaCorrectionSum / neutralGuardPixels : 0,
       replacedPixels,
       meanBlend: replacedPixels ? blendSum / replacedPixels : 0,
       maxBlend
