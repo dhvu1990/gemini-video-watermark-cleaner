@@ -8,18 +8,18 @@ test('formats preview anti-streak telemetry for structured residual investigatio
     atlas: { donorCount: 3, meanConfidence: 0.7123, meanDonorSpread: 21.456 },
     structured: {
       attempted: true, accepted: false, acceptedMode: 'none', alignedBeforeScore: 2.315, alignedAfterScore: 2.281, alignedSampleDensity: 0.0185, alignedImprovement: 0.0147,
-      footprint: { score: 1.8426, rawScore: 3.1254, coverage: 0.0712, shapeAlignedDensity: 0.0438, continuityMean: 0.318 }
+      footprint: { score: 1.8426, rawScore: 3.1254, coverage: 0.0712, shapeAlignedDensity: 0.0438, continuityMean: 0.318, samples: 84, candidateSamples: 240 }
     },
     riskFlags: ['temporal-donor-rejected', 'high-donor-spread', 'dense-structured-ring-residual']
   });
   assert.equal(formatted.riskFlags, 'temporal-donor-rejected, high-donor-spread, dense-structured-ring-residual');
   assert.equal(formatted.donorAttempted, 'YES'); assert.equal(formatted.donorAccepted, 'NO'); assert.equal(formatted.donorGuardedRatio, '37.5%'); assert.equal(formatted.donorStructureMismatch, '0.428'); assert.equal(formatted.donorTotalRatio, '1.0112'); assert.equal(formatted.atlasDonors, '3'); assert.equal(formatted.atlasDonorSpread, '21.46'); assert.equal(formatted.structuredBefore, '2.315'); assert.equal(formatted.structuredDensity, '1.8%'); assert.equal(formatted.structuredImprovement, '1.5%');
-  assert.equal(formatted.footprintScore, '1.843'); assert.equal(formatted.footprintRawScore, '3.125'); assert.equal(formatted.footprintCoverage, '7.1%'); assert.equal(formatted.footprintShapeDensity, '4.4%'); assert.equal(formatted.footprintContinuity, '31.8%');
+  assert.equal(formatted.footprintScore, '1.843'); assert.equal(formatted.footprintRawScore, '3.125'); assert.equal(formatted.footprintCoverage, '7.1%'); assert.equal(formatted.footprintShapeDensity, '4.4%'); assert.equal(formatted.footprintContinuity, '31.8%'); assert.equal(formatted.footprintClass, 'STRONG'); assert.notEqual(formatted.footprintEvidence, '-'); assert.match(formatted.footprintReason, /shape-score/);
 });
 
 test('uses stable empty-state values when telemetry is absent', () => {
   const formatted = formatAntiStreakTelemetry(null);
-  assert.equal(formatted.riskFlags, 'none'); assert.equal(formatted.donorAttempted, '-'); assert.equal(formatted.atlasDonors, '-'); assert.equal(formatted.structuredMode, 'none'); assert.equal(formatted.footprintScore, '-');
+  assert.equal(formatted.riskFlags, 'none'); assert.equal(formatted.donorAttempted, '-'); assert.equal(formatted.atlasDonors, '-'); assert.equal(formatted.structuredMode, 'none'); assert.equal(formatted.footprintScore, '-'); assert.equal(formatted.footprintClass, '-'); assert.equal(formatted.footprintEvidence, '-');
 });
 
 test('formats export risk counters in descending frequency order', () => {
