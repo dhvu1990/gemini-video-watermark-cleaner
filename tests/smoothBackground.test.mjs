@@ -62,6 +62,22 @@ function mae(a, b, mask) {
   return count ? sum / count : 0;
 }
 
+function chromaDistanceFromNeutral(image, mask) {
+  let sum = 0;
+  let count = 0;
+  for (let p = 0; p < mask.length; p++) {
+    if (!mask[p]) continue;
+    const i = p * 4;
+    const r = image.data[i], g = image.data[i + 1], b = image.data[i + 2];
+    const y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const cb = (b - y) * 0.5389;
+    const cr = (r - y) * 0.6350;
+    sum += Math.hypot(cb, cr);
+    count++;
+  }
+  return count ? sum / count : 0;
+}
+
 test('smooth gradient background is classified safe and full-footprint rebuild removes the watermark', () => {
   const width = 81, height = 81;
   const alpha = diamondAlpha(width, height);
@@ -81,6 +97,47 @@ test('smooth gradient background is classified safe and full-footprint rebuild r
   const after = mae(repaired, clean, mask);
   assert.equal(repaired.smoothBackground.applied, true);
   assert.ok(after < before * 0.18, `expected strong reconstruction improvement: ${before} -> ${after}`);
+});
+
+test('neutral smooth chroma guard suppresses synthetic yellow-green cast without changing luma reconstruction mode', () => {
+  const width = 81, height = 81;
+  const alpha = diamondAlpha(width, height);
+  const neutral = makeImage(width, height, (x, y) => {
+    const value = 224 + x * 0.05 - y * 0.04;
+    return [value + 1, value, value - 1];
+  });
+  const analysis = analyzeSmoothBackground(neutral, alpha);
+  assert.equal(analysis.safe, true, JSON.stringify(analysis));
+  assert.ok(analysis.neutralChromaConfidence > 0.70, JSON.stringify(analysis));
+
+  const biased = {
+    ...analysis,
+    coefficients: analysis.coefficients.map((channel) => [...channel])
+  };
+  biased.coefficients[0][0] += 10;
+  biased.coefficients[1][0] += 4;
+  biased.coefficients[2][0] -= 7;
+
+  const mask = alpha.map((value) => value > 0.005);
+  const unguarded = applySmoothBackgroundReconstruction(neutral, alpha, biased, { neutralChromaGuard: false });
+  const guarded = applySmoothBackgroundReconstruction(neutral, alpha, biased, { neutralChromaGuard: true });
+  const unguardedChroma = chromaDistanceFromNeutral(unguarded, mask);
+  const guardedChroma = chromaDistanceFromNeutral(guarded, mask);
+  assert.equal(guarded.smoothBackground.neutralChromaGuardApplied, true);
+  assert.ok(guarded.smoothBackground.neutralChromaGuardPixels > 0);
+  assert.ok(guardedChroma < unguardedChroma * 0.72, `expected chroma guard improvement: ${unguardedChroma} -> ${guardedChroma}`);
+});
+
+test('saturated smooth background does not activate neutral chroma guard', () => {
+  const width = 81, height = 81;
+  const alpha = diamondAlpha(width, height);
+  const cyan = makeImage(width, height, (x, y) => [35 + x * 0.08, 155 + y * 0.05, 172 + x * 0.04]);
+  const analysis = analyzeSmoothBackground(cyan, alpha);
+  assert.equal(analysis.safe, true, JSON.stringify(analysis));
+  assert.ok(analysis.neutralChromaConfidence < 0.20, JSON.stringify(analysis));
+  const repaired = applySmoothBackgroundReconstruction(cyan, alpha, analysis);
+  assert.equal(repaired.smoothBackground.neutralChromaGuardApplied, false);
+  assert.equal(repaired.smoothBackground.neutralChromaGuardPixels, 0);
 });
 
 test('structured keyboard-like background is rejected from aggressive rebuild', () => {
