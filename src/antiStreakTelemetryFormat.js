@@ -1,3 +1,5 @@
+import { classifyStructuredFootprintRisk } from './video/structuredFootprintRisk.js';
+
 function finite(value, fallback = null) {
   const number = Number(value);
   return Number.isFinite(number) ? number : fallback;
@@ -22,6 +24,7 @@ export function formatAntiStreakTelemetry(summary = null) {
   const atlas = summary?.atlas || {};
   const structured = summary?.structured || {};
   const footprint = structured?.footprint || {};
+  const footprintRisk = classifyStructuredFootprintRisk(footprint);
   const flags = Array.isArray(summary?.riskFlags) ? summary.riskFlags.filter(Boolean) : [];
 
   return {
@@ -46,7 +49,10 @@ export function formatAntiStreakTelemetry(summary = null) {
     footprintRawScore: fixed(footprint.rawScore, 3),
     footprintCoverage: percent(footprint.coverage),
     footprintShapeDensity: percent(footprint.shapeAlignedDensity),
-    footprintContinuity: percent(footprint.continuityMean)
+    footprintContinuity: percent(footprint.continuityMean),
+    footprintClass: footprintRisk.level === 'insufficient' ? '-' : footprintRisk.level.toUpperCase(),
+    footprintEvidence: footprintRisk.level === 'insufficient' ? '-' : percent(footprintRisk.evidence),
+    footprintReason: footprintRisk.level === 'insufficient' ? footprintRisk.reason : footprintRisk.reason
   };
 }
 
