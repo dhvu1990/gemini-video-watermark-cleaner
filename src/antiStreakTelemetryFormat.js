@@ -21,6 +21,7 @@ export function formatAntiStreakTelemetry(summary = null) {
   const donor = summary?.temporalDonor || {};
   const atlas = summary?.atlas || {};
   const structured = summary?.structured || {};
+  const footprint = structured?.footprint || {};
   const flags = Array.isArray(summary?.riskFlags) ? summary.riskFlags.filter(Boolean) : [];
 
   return {
@@ -40,7 +41,12 @@ export function formatAntiStreakTelemetry(summary = null) {
     structuredBefore: fixed(structured.alignedBeforeScore, 3),
     structuredAfter: fixed(structured.alignedAfterScore, 3),
     structuredDensity: percent(structured.alignedSampleDensity),
-    structuredImprovement: percent(structured.alignedImprovement)
+    structuredImprovement: percent(structured.alignedImprovement),
+    footprintScore: fixed(footprint.score, 3),
+    footprintRawScore: fixed(footprint.rawScore, 3),
+    footprintCoverage: percent(footprint.coverage),
+    footprintShapeDensity: percent(footprint.shapeAlignedDensity),
+    footprintContinuity: percent(footprint.continuityMean)
   };
 }
 

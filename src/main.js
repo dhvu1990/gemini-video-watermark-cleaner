@@ -1,6 +1,7 @@
 import { formatFileSize, validateVideoFile } from './video/file.js';
 import { QUICK_SAMPLE_COUNT, QUICK_SCAN_FRACTION, shouldAcceptQuickDetection } from './video/analysisPolicy.js';
 import { formatAntiStreakExportSummary } from './antiStreakTelemetryFormat.js';
+import { measureStructuredFootprintResidual } from './video/structuredFootprintDiagnostics.js';
 
 const els = Object.fromEntries([
   'fileInput','chooseFileBtn','dropZone','fileInfo','sampleCount','minConfidence','analyzeBtn','detectResult',
@@ -61,7 +62,13 @@ function renderDetection(result, { source = 'full' } = {}) {
   if (d?.position) { els.wmX.value = d.position.x; els.wmY.value = d.position.y; els.wmSize.value = d.position.width; if (Number.isFinite(d.alphaGain)) els.alphaGain.value = d.alphaGain.toFixed(3); }
   const finalCleanup = preview?.dualRingFinish?.finalCleanup || (preview?.edgeBridge ? { before: preview.edgeBridge.finalResidualBefore || null, after: preview.edgeBridge.finalResidualAfter || null, improvement: preview.edgeBridge.finalResidualImprovement ?? null, correctedPixels: preview.edgeBridge.quadrantPixels ?? 0 } : null);
   const adaptiveBackground = preview?.dualRingFinish?.smoothBackground || null;
-  const antiStreak = preview?.antiStreak || null;
+  const footprint = preview?.cleaned && result?.internalDetection?.alphaMap
+    ? measureStructuredFootprintResidual(preview.cleaned, result.internalDetection.alphaMap)
+    : null;
+  const antiBase = preview?.antiStreak || null;
+  const antiStreak = antiBase
+    ? { ...antiBase, structured: { ...(antiBase.structured || {}), footprint } }
+    : (footprint ? { structured: { footprint }, riskFlags: [] } : null);
   els.detectResult.textContent = JSON.stringify({ metadata: meta, detection: d, finalCleanup, adaptiveBackground, antiStreak }, null, 2);
   if (antiStreak) console.info('[antiStreak preview]', antiStreak);
   els.previewPanel.classList.remove('hidden'); if (preview?.original) drawRoi(els.originalZoom, preview.original); if (preview?.cleaned) drawRoi(els.cleanedZoom, preview.cleaned); seekPreview(preview?.timestamp);
