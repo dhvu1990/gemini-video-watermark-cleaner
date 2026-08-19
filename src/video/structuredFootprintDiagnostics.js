@@ -49,12 +49,12 @@ function cosineAbs(a, b) {
   return Math.abs((a.gx * b.gx + a.gy * b.gy) / (a.magnitude * b.magnitude));
 }
 
-function findOutsideSample(low, alphaMap, width, height, x, y, nx, ny, sign, options) {
-  const maxDistance = Math.max(3, Number(options.continuityRadius ?? 8));
+function findOutsideSample(low, alphaMap, width, height, x, y, dx, dy, sign, options) {
+  const maxDistance = Math.max(3, Number(options.continuityRadius ?? 10));
   const maxAlpha = Number.isFinite(options.outsideMaxAlpha) ? options.outsideMaxAlpha : 0.012;
   for (let distance = 2; distance <= maxDistance; distance++) {
-    const sx = Math.round(x + nx * distance * sign);
-    const sy = Math.round(y + ny * distance * sign);
+    const sx = Math.round(x + dx * distance * sign);
+    const sy = Math.round(y + dy * distance * sign);
     if (sx < 1 || sy < 1 || sx >= width - 1 || sy >= height - 1) break;
     if ((alphaMap[sy * width + sx] || 0) > maxAlpha) continue;
     return gradient(low, width, height, sx, sy);
@@ -62,12 +62,15 @@ function findOutsideSample(low, alphaMap, width, height, x, y, nx, ny, sign, opt
   return null;
 }
 
-function continuityConfidence(low, alphaMap, width, height, x, y, local, ag, options) {
-  if (local.magnitude < 1e-6 || ag.magnitude < 1e-6) return 0;
-  const nx = ag.gx / ag.magnitude;
-  const ny = ag.gy / ag.magnitude;
-  const outsideA = findOutsideSample(low, alphaMap, width, height, x, y, nx, ny, -1, options);
-  const outsideB = findOutsideSample(low, alphaMap, width, height, x, y, nx, ny, 1, options);
+function continuityConfidence(low, alphaMap, width, height, x, y, local, options) {
+  if (local.magnitude < 1e-6) return 0;
+
+  // A real scene/material edge continues along its tangent, not along the image-gradient normal.
+  // Probe both tangent directions until reaching clean pixels outside the watermark footprint.
+  const tx = -local.gy / local.magnitude;
+  const ty = local.gx / local.magnitude;
+  const outsideA = findOutsideSample(low, alphaMap, width, height, x, y, tx, ty, -1, options);
+  const outsideB = findOutsideSample(low, alphaMap, width, height, x, y, tx, ty, 1, options);
   let best = 0;
   for (const outside of [outsideA, outsideB]) {
     if (!outside || outside.magnitude < 0.35) continue;
@@ -106,7 +109,7 @@ export function measureStructuredFootprintResidual(image, alphaMap, options = {}
       const alignmentWeight = smoothstep(0.42, 0.90, alignment);
       const weight = Math.max(0.08, alphaBand) * alignmentWeight;
       if (weight < 0.03) continue;
-      const continuity = continuityConfidence(low, alphaMap, width, height, x, y, ig, ag, options);
+      const continuity = continuityConfidence(low, alphaMap, width, height, x, y, ig, options);
       const raw = ig.magnitude * alignmentWeight;
       const discounted = raw * (1 - continuity * 0.88);
       weightedRaw += raw * weight;
