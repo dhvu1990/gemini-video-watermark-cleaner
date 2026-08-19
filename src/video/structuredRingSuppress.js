@@ -2,6 +2,7 @@ import { buildHybridRepairMask } from './textureRepair.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
 import { applyStructuredConsensusRepair } from './structuredConsensusRepair.js';
 import { applyShapeGhostSuppression } from './shapeGhostSuppress.js';
+import { applyCenterSeamSuppression } from './centerSeamSuppress.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -190,6 +191,18 @@ function finishWithShapeGhost(image, alphaMap, options) {
   return applyShapeGhostSuppression(image, alphaMap, { enabled: true, ...(options.shapeGhostOptions || {}) });
 }
 
+function finishWithCenterSeam(image, alphaMap, options) {
+  if (options.centerSeam === false) {
+    return { width: image.width, height: image.height, data: image.data, centerSeam: { enabled: false, attempted: false, accepted: false } };
+  }
+  return applyCenterSeamSuppression(image, alphaMap, { enabled: true, ...(options.centerSeamOptions || {}) });
+}
+
+function acceptedModeWithCenter(baseMode, centerSeam) {
+  if (!centerSeam?.accepted) return baseMode;
+  return baseMode === 'none' ? 'center-seam' : `${baseMode}+center-seam`;
+}
+
 export function applyStructuredResidualRingSuppression(image, alphaMap, options = {}) {
   if (options.enabled === false || alphaMap.length !== image.width * image.height) {
     return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredRing: { enabled: false, attempted: false, accepted: false } };
@@ -211,7 +224,11 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   if (!shouldAttempt) {
     const ghostResult = finishWithShapeGhost(working, alphaMap, options);
     const shapeGhost = ghostResult.shapeGhost || { enabled: true, attempted: true, accepted: false };
-    const ghostSelected = shapeGhost.accepted ? ghostResult : working;
+    let ghostSelected = shapeGhost.accepted ? { width: ghostResult.width, height: ghostResult.height, data: ghostResult.data } : working;
+    const seamResult = finishWithCenterSeam(ghostSelected, alphaMap, options);
+    const centerSeam = seamResult.centerSeam || { enabled: true, attempted: true, accepted: false };
+    if (centerSeam.accepted) ghostSelected = { width: seamResult.width, height: seamResult.height, data: seamResult.data };
+    const baseMode = shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none');
     return {
       width: ghostSelected.width,
       height: ghostSelected.height,
@@ -219,8 +236,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       structuredRing: {
         enabled: true,
         attempted: false,
-        accepted: consensus.accepted || shapeGhost.accepted,
-        acceptedMode: shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none'),
+        accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted,
+        acceptedMode: acceptedModeWithCenter(baseMode, centerSeam),
         before,
         after: before,
         alignedBefore,
@@ -230,7 +247,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
         salvageAttempted: false,
         salvageAccepted: false,
         consensus,
-        shapeGhost
+        shapeGhost,
+        centerSeam
       }
     };
   }
@@ -285,9 +303,13 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   const ghostResult = finishWithShapeGhost(selected, alphaMap, options);
   const shapeGhost = ghostResult.shapeGhost || { enabled: true, attempted: true, accepted: false };
   if (shapeGhost.accepted) selected = { width: ghostResult.width, height: ghostResult.height, data: ghostResult.data };
-  const acceptedMode = shapeGhost.accepted
+  const seamResult = finishWithCenterSeam(selected, alphaMap, options);
+  const centerSeam = seamResult.centerSeam || { enabled: true, attempted: true, accepted: false };
+  if (centerSeam.accepted) selected = { width: seamResult.width, height: seamResult.height, data: seamResult.data };
+  const baseAcceptedMode = shapeGhost.accepted
     ? (accepted ? 'primary+shape-ghost' : (salvageAccepted ? 'micro-salvage+shape-ghost' : (consensus.accepted ? 'consensus+shape-ghost' : 'shape-ghost')))
     : (accepted ? 'primary' : (salvageAccepted ? 'micro-salvage' : (consensus.accepted ? 'consensus' : 'none')));
+  const acceptedMode = acceptedModeWithCenter(baseAcceptedMode, centerSeam);
 
   return {
     width: selected.width,
@@ -296,7 +318,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     structuredRing: {
       enabled: true,
       attempted: true,
-      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted,
+      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted,
       ringAccepted,
       acceptedMode,
       before,
@@ -318,7 +340,8 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       salvageCandidatePixels,
       salvageNearMissRatio: nearMissRatio,
       consensus,
-      shapeGhost
+      shapeGhost,
+      centerSeam
     }
   };
 }
