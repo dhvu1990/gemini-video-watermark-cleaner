@@ -1,6 +1,7 @@
 import { APP_VERSION } from '../version.js';
 import { cleanVideo, inspectVideo } from './engine.js';
 import { resetAdaptiveFinishState } from './adaptiveFinish.js';
+import { prepareInspectResultForWorker } from './inspectResultBridge.js';
 
 let cancelled = false;
 
@@ -30,7 +31,7 @@ self.onmessage = async (event) => {
         shouldCancel
       });
       if (cancelled) return self.postMessage({ type: 'cancelled', tag });
-      const { internalDetection, ...publicResult } = result;
+      const publicResult = prepareInspectResultForWorker(result);
       self.postMessage({ type: 'inspect-result', tag, result: publicResult });
       return;
     }
