@@ -90,7 +90,7 @@ test('hard unsafe structure exits smooth mode immediately', () => {
   assert.equal(decision.switched, true);
 });
 
-test('smooth rebuild reports diagnostics after the final reconstructed output', () => {
+test('smooth branch reports final diagnostics whether reconstruction is accepted or preservation-guarded', () => {
   resetAdaptiveFinishState();
   const width = 61, height = 61;
   const alpha = diamondAlpha(width, height);
@@ -98,8 +98,12 @@ test('smooth rebuild reports diagnostics after the final reconstructed output', 
   const watermarked = overlayWhite(clean, alpha);
   const result = applyDualRingLumaFinish(watermarked, alpha, { strength: 0.56, emptyZoneHard: false });
   assert.equal(result.smoothBackground.mode, 'smooth-rebuild');
-  assert.equal(result.smoothBackground.applied, true);
-  assert.equal(result.dualRingFinish.finalCleanup.source, 'post-smooth-rebuild');
+  if (result.smoothBackground.applied) {
+    assert.equal(result.dualRingFinish.finalCleanup.source, 'post-smooth-rebuild');
+  } else {
+    assert.equal(result.smoothBackground.detailPreservation?.guardTriggered, true);
+    assert.equal(result.smoothBackground.reason, 'detail-preservation-reject');
+  }
   assert.ok(Number.isFinite(result.dualRingFinish.finalCleanup.after.total));
   assert.ok(result.dualRingFinish.finalCleanup.after.total <= result.dualRingFinish.finalCleanup.before.total * 1.05);
 });

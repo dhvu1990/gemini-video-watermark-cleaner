@@ -91,7 +91,7 @@ function sampleShapeResidual(image, alphaMap, masks, x, y, options = {}) {
   const ig = imageGradient(image, x, y);
   if (ig.magnitude < 0.75) return null;
   const alignment = Math.abs((ig.gx * ag.gx + ig.gy * ag.gy) / Math.max(1e-6, ig.magnitude * ag.magnitude));
-  const minAlignment = Number(options.minAlignment ?? 0.62);
+  const minAlignment = Number(options.minAlignment ?? 0.58);
   if (alignment < minAlignment) return null;
 
   const nx = ag.gx / ag.magnitude;
@@ -124,15 +124,15 @@ export function applyCoherentStructuredShapePass(image, alphaMap, options = {}) 
 
   const masks = buildHybridRepairMask(alphaMap, image.width, image.height);
   const out = new Uint8ClampedArray(image.data);
-  const strength = clamp(Number(options.strength ?? 0.22), 0.06, 0.34);
-  const minNeighborResidual = Number(options.minNeighborResidual ?? 0.85);
-  const maxLumaDelta = Math.max(2, Number(options.maxLumaDelta ?? 9));
+  const strength = clamp(Number(options.strength ?? 0.24), 0.06, 0.34);
+  const minNeighborResidual = Number(options.minNeighborResidual ?? 0.72);
+  const maxLumaDelta = Math.max(2, Number(options.maxLumaDelta ?? 8.5));
   let correctedPixels = 0, coherentCandidates = 0, guardedPixels = 0, blendSum = 0, deltaSum = 0;
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
       const sample = sampleShapeResidual(image, alphaMap, masks, x, y, options);
-      if (!sample || Math.abs(sample.residual) < (options.minResidual ?? 1.25)) continue;
+      if (!sample || Math.abs(sample.residual) < (options.minResidual ?? 1.05)) continue;
       const tangentDistance = Number(options.tangentDistance ?? 2.0);
       const ax = Math.round(x + sample.tx * tangentDistance);
       const ay = Math.round(y + sample.ty * tangentDistance);
@@ -150,18 +150,18 @@ export function applyCoherentStructuredShapePass(image, alphaMap, options = {}) 
         smoothstep(options.tangentGuardLow ?? 28, options.tangentGuardHigh ?? 76, sample.tangentDelta)
       );
       if (structureGuard >= 0.985) { guardedPixels++; continue; }
-      const alignmentWeight = smoothstep(options.minAlignment ?? 0.62, 0.96, sample.alignment);
-      const residualGate = smoothstep(options.minResidual ?? 1.25, options.fullResidual ?? 7.5, Math.abs(sample.residual));
+      const alignmentWeight = smoothstep(options.minAlignment ?? 0.58, 0.96, sample.alignment);
+      const residualGate = smoothstep(options.minResidual ?? 1.05, options.fullResidual ?? 6.5, Math.abs(sample.residual));
       const neighborFloor = Math.min(Math.abs(neighborA.residual), Math.abs(neighborB.residual), Math.abs(sample.residual));
       const neighborCeil = Math.max(Math.abs(neighborA.residual), Math.abs(neighborB.residual), Math.abs(sample.residual), 1e-6);
       const coherenceWeight = smoothstep(0.18, 0.72, neighborFloor / neighborCeil);
-      const blend = Math.min(0.24, strength * sample.ring * alignmentWeight * residualGate * coherenceWeight * (1 - structureGuard * 0.94));
-      if (blend < 0.025) continue;
+      const blend = Math.min(0.25, strength * sample.ring * alignmentWeight * residualGate * coherenceWeight * (1 - structureGuard * 0.94));
+      if (blend < 0.022) continue;
 
       const targetY = luma(sample.target);
       const currentY = luma([image.data[sample.idx], image.data[sample.idx + 1], image.data[sample.idx + 2]]);
       const shift = clamp(targetY - currentY, -maxLumaDelta, maxLumaDelta) * blend;
-      if (Math.abs(shift) < 0.12) continue;
+      if (Math.abs(shift) < 0.10) continue;
       for (let c = 0; c < 3; c++) out[sample.idx + c] = clampByte(image.data[sample.idx + c] + shift);
       correctedPixels++;
       blendSum += blend;
@@ -175,11 +175,12 @@ export function applyCoherentStructuredShapePass(image, alphaMap, options = {}) 
 export function buildStructuredEvidenceCandidate(image, alphaMap, options = {}) {
   const shape = applyCoherentStructuredShapePass(image, alphaMap, {
     enabled: options.shapeCoherent !== false,
-    strength: options.refinementStrength ?? 0.22,
-    minAlignment: options.refinementMinAlignment ?? 0.62,
-    maxLumaDelta: options.refinementMaxLumaDelta ?? 9,
-    minResidual: options.refinementMinResidual ?? 1.25,
-    fullResidual: options.refinementFullResidual ?? 7.5
+    strength: options.refinementStrength ?? 0.24,
+    minAlignment: options.refinementMinAlignment ?? 0.58,
+    maxLumaDelta: options.refinementMaxLumaDelta ?? 8.5,
+    minResidual: options.refinementMinResidual ?? 1.05,
+    fullResidual: options.refinementFullResidual ?? 6.5,
+    minNeighborResidual: options.refinementMinNeighborResidual ?? 0.72
   });
   let selected = shape.correctedPixels > 0 ? shape.image : image;
 
@@ -187,9 +188,11 @@ export function buildStructuredEvidenceCandidate(image, alphaMap, options = {}) 
   const toneResult = toneMicroEnabled
     ? applyLocalToneMatch(selected, alphaMap, {
         enabled: true,
-        strength: options.refinementToneStrength ?? 0.42,
-        maxLumaShift: options.refinementToneMaxShift ?? 6,
-        minScore: options.refinementToneMinScore ?? 0.78,
+        strength: options.refinementToneStrength ?? 0.40,
+        maxLumaShift: options.refinementToneMaxShift ?? 5.5,
+        maxLocalShift: options.refinementToneMaxLocalShift ?? 4.5,
+        localMix: options.refinementToneLocalMix ?? 0.34,
+        minScore: options.refinementToneMinScore ?? 0.72,
         minImprovement: options.refinementToneMinImprovement ?? 0.025,
         minSamples: options.refinementToneMinSamples ?? 12,
         minReferenceSamples: options.refinementToneMinReferenceSamples ?? 20,
