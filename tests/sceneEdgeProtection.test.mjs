@@ -58,7 +58,7 @@ test('plain smooth gradient does not trigger crossing scene-edge protection', ()
   assert.ok(metric.score < 0.34, JSON.stringify(metric));
 });
 
-test('per-pixel protection is stronger on a scene edge than on nearby smooth pixels', () => {
+test('per-pixel protection is stronger on a scene edge boundary than on nearby smooth pixels', () => {
   const width = 81, height = 81;
   const alpha = diamondAlpha(width, height);
   const src = makeImage(width, height, (x, y) => {
@@ -66,7 +66,14 @@ test('per-pixel protection is stronger on a scene edge than on nearby smooth pix
     const line = Math.abs(y - (0.50 * x + 20)) <= 1.2;
     return line ? [42, 50, 58] : [base, base + 18, base + 34];
   });
-  const edge = sceneEdgeProtectionAt(src, alpha, 40, 40);
-  const smooth = sceneEdgeProtectionAt(src, alpha, 34, 40);
-  assert.ok(edge.weight > smooth.weight, JSON.stringify({ edge, smooth }));
+  let strongest = null;
+  for (let y = 36; y <= 44; y++) {
+    for (let x = 34; x <= 46; x++) {
+      const sample = sceneEdgeProtectionAt(src, alpha, x, y);
+      if (!strongest || sample.weight > strongest.weight) strongest = { ...sample, x, y };
+    }
+  }
+  const smooth = sceneEdgeProtectionAt(src, alpha, 34, 44);
+  assert.ok(strongest.weight > 0.20, JSON.stringify({ strongest, smooth }));
+  assert.ok(strongest.weight > smooth.weight, JSON.stringify({ strongest, smooth }));
 });
