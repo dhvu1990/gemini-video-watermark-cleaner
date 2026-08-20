@@ -3,6 +3,13 @@ function mountBatchPanel(doc = document) {
   const exportPanel = Array.from(doc.querySelectorAll('section.panel')).find((panel) => panel.querySelector('#cleanBtn'));
   if (!exportPanel) return false;
 
+  // Keep the most frequent single-video actions together: choose a video, then clean/export it.
+  const chooserPanel = doc.getElementById('dropZone')?.closest?.('section.panel') || null;
+  if (chooserPanel && chooserPanel.nextElementSibling !== exportPanel) chooserPanel.after(exportPanel);
+  const exportHeading = exportPanel.querySelector('h2');
+  if (exportHeading) exportHeading.textContent = 'Quick clean / Export';
+  exportPanel.classList.add('quick-export-panel');
+
   const panel = doc.createElement('section');
   panel.id = 'batchPanel';
   panel.className = 'panel';
@@ -26,11 +33,12 @@ function mountBatchPanel(doc = document) {
     </div>
     <div class="muted batch-folder">Output folder: <strong id="batchOutputFolderName">Not selected — results stay available as individual downloads.</strong></div>
     <div id="batchQueue" class="batch-queue"></div>
-    <p class="muted batch-note">Batch processing is sequential to reduce browser memory pressure. It uses the same detection and cleanup settings shown above for every queued video.</p>`;
-  exportPanel.parentNode.insertBefore(panel, exportPanel);
+    <p class="muted batch-note">Batch processing is sequential to reduce browser memory pressure. A single worker is reused across the queue and transient worker/network failures are retried automatically before a file is marked as failed.</p>`;
+  exportPanel.after(panel);
 
   const style = doc.createElement('style');
   style.textContent = `
+    .quick-export-panel{border-color:#3a527e}.quick-export-panel .actions{margin-top:2px}
     .batch-heading{margin-bottom:12px}.batch-toolbar{align-items:end}.batch-name-mode{display:grid;gap:6px;margin:0;min-width:170px}
     .batch-name-mode select{border:1px solid #354565;background:#0c1325;color:#eef3ff;border-radius:10px;padding:10px 11px}
     .batch-folder{margin:12px 0}.batch-folder strong{color:#c9d7f2}.batch-queue{display:grid;gap:9px;margin-top:12px}
