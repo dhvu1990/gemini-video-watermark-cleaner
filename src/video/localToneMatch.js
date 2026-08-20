@@ -17,6 +17,18 @@ function median(values) {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5;
 }
+function weightedMedian(samples) {
+  if (!samples.length) return 0;
+  const sorted = [...samples].sort((a, b) => a.value - b.value);
+  const total = sorted.reduce((sum, sample) => sum + Math.max(0, sample.weight || 0), 0);
+  if (total <= 1e-9) return median(sorted.map((sample) => sample.value));
+  let cumulative = 0;
+  for (const sample of sorted) {
+    cumulative += Math.max(0, sample.weight || 0);
+    if (cumulative >= total * 0.5) return sample.value;
+  }
+  return sorted[sorted.length - 1].value;
+}
 
 function footprintGeometry(alphaMap, width, height, minAlpha = 0.035) {
   let minX = width, maxX = -1, minY = height, maxY = -1;
@@ -116,64 +128,80 @@ function targetSample(image, alphaMap, plane, x, y, options = {}) {
   const predicted = planeValue(plane, x, y);
   const alphaWeight = smoothstep(minAlpha, 0.18, alpha) * (1 - smoothstep(0.52, maxAlpha, alpha));
   const textureWeight = 1 - smoothstep(gradientMax * 0.45, gradientMax, gradient);
-  const weight = Math.max(0.10, alphaWeight) * textureWeight;
-  if (weight < 0.05) return null;
+  const edgeFloor = Number.isFinite(options.footprintWeightFloor) ? options.footprintWeightFloor : 0.025;
+  const weight = alphaWeight * textureWeight;
+  if (weight < edgeFloor) return null;
   return { p, idx: p * 4, alpha, gradient, current, predicted, residual: current - predicted, weight };
 }
 
 export function measureLocalToneMismatch(image, alphaMap, options = {}) {
   if (!alphaMap || alphaMap.length !== image.width * image.height) {
-    return { score: 0, signed: 0, samples: 0, referenceSamples: 0, plane: null, geometry: null };
+    return { score: 0, signed: 0, samples: 0, referenceSamples: 0, plane: null, geometry: null, weightSum: 0 };
   }
   const geometry = footprintGeometry(alphaMap, image.width, image.height, options.geometryMinAlpha ?? 0.035);
-  if (!geometry.valid) return { score: 0, signed: 0, samples: 0, referenceSamples: 0, plane: null, geometry };
+  if (!geometry.valid) return { score: 0, signed: 0, samples: 0, referenceSamples: 0, plane: null, geometry, weightSum: 0 };
   const references = collectReferenceSamples(image, alphaMap, geometry, options);
   const plane = robustPlane(references);
-  if (!plane) return { score: 0, signed: 0, samples: 0, referenceSamples: references.length, plane: null, geometry };
+  if (!plane) return { score: 0, signed: 0, samples: 0, referenceSamples: references.length, plane: null, geometry, weightSum: 0 };
   const residuals = [];
+  let weightSum = 0;
   for (let y = Math.max(1, geometry.minY); y <= Math.min(image.height - 2, geometry.maxY); y++) {
     for (let x = Math.max(1, geometry.minX); x <= Math.min(image.width - 2, geometry.maxX); x++) {
       const sample = targetSample(image, alphaMap, plane, x, y, options);
-      if (sample) residuals.push(sample.residual);
+      if (sample) {
+        residuals.push({ value: sample.residual, weight: sample.weight });
+        weightSum += sample.weight;
+      }
     }
   }
-  const signed = median(residuals);
+  const signed = weightedMedian(residuals);
   return {
     score: Math.abs(signed),
     signed,
     samples: residuals.length,
     referenceSamples: references.length,
     plane,
-    geometry
+    geometry,
+    weightSum
   };
 }
 
 function applyTonePass(image, alphaMap, before, options = {}) {
   const strength = clamp(Number(options.strength ?? 0.72), 0, 0.90);
   const maxShift = Math.max(1, Number(options.maxLumaShift ?? 10));
-  const desired = clamp(-before.signed * strength, -maxShift, maxShift);
+  const maxLocalShift = Math.max(1, Number(options.maxLocalShift ?? 6));
+  const localMix = clamp(Number(options.localMix ?? 0.38), 0, 0.65);
+  const globalDesired = clamp(-before.signed * strength, -maxShift, maxShift);
   const out = new Uint8ClampedArray(image.data);
-  let correctedPixels = 0, shiftSum = 0;
+  let correctedPixels = 0, shiftSum = 0, localShiftSum = 0;
   const { geometry, plane } = before;
   for (let y = Math.max(1, geometry.minY); y <= Math.min(image.height - 2, geometry.maxY); y++) {
     for (let x = Math.max(1, geometry.minX); x <= Math.min(image.width - 2, geometry.maxX); x++) {
       const sample = targetSample(image, alphaMap, plane, x, y, options);
       if (!sample) continue;
       const residualGate = smoothstep(options.minResidual ?? 0.9, options.fullResidual ?? 6.0, Math.abs(sample.residual));
-      const signAgreement = sample.residual * before.signed > 0 ? 1 : 0.35;
-      const blend = clamp(sample.weight * residualGate * signAgreement, 0, 1);
+      const signAgreement = sample.residual * before.signed > 0 ? 1 : 0.22;
+      const adaptiveMix = signAgreement >= 1 ? localMix * smoothstep(0.08, 0.55, sample.weight) : 0;
+      const localDesired = clamp(-sample.residual * strength, -maxLocalShift, maxLocalShift);
+      const desired = globalDesired * (1 - adaptiveMix) + localDesired * adaptiveMix;
+      const footprintTaper = smoothstep(0.025, 0.40, sample.weight);
+      const blend = clamp(sample.weight * (0.62 + footprintTaper * 0.38) * residualGate * signAgreement, 0, 1);
       const shift = desired * blend;
       if (Math.abs(shift) < 0.18) continue;
       for (let c = 0; c < 3; c++) out[sample.idx + c] = clampByte(image.data[sample.idx + c] + shift);
       correctedPixels++;
       shiftSum += Math.abs(shift);
+      localShiftSum += Math.abs(localDesired - globalDesired) * adaptiveMix;
     }
   }
   return {
     image: { width: image.width, height: image.height, data: out },
     correctedPixels,
     meanAbsShift: correctedPixels ? shiftSum / correctedPixels : 0,
-    requestedShift: desired
+    meanLocalAdaptation: correctedPixels ? localShiftSum / correctedPixels : 0,
+    requestedShift: globalDesired,
+    localMix,
+    maxLocalShift
   };
 }
 
@@ -190,7 +218,7 @@ export function applyLocalToneMatch(image, alphaMap, options = {}) {
   const outerBefore = measurePostCleanupResidual(image, alphaMap);
   const minSamples = Math.max(8, Number(options.minSamples ?? 18));
   const minReferenceSamples = Math.max(12, Number(options.minReferenceSamples ?? 24));
-  const minScore = Number.isFinite(options.minScore) ? options.minScore : 1.15;
+  const minScore = Number.isFinite(options.minScore) ? options.minScore : 1.05;
   if (!before.plane || before.samples < minSamples || before.referenceSamples < minReferenceSamples || before.score < minScore) {
     return {
       width: image.width,
@@ -204,11 +232,11 @@ export function applyLocalToneMatch(image, alphaMap, options = {}) {
   const outerAfter = measurePostCleanupResidual(pass.image, alphaMap);
   const improvement = before.score > 1e-6 ? (before.score - after.score) / before.score : 0;
   const accepted = pass.correctedPixels > 0
-    && improvement >= (options.minImprovement ?? 0.035)
-    && after.score <= before.score * 0.965
-    && outerAfter.total <= outerBefore.total * 1.006
-    && outerAfter.luma <= outerBefore.luma * 1.010
-    && outerAfter.chroma <= outerBefore.chroma * 1.008;
+    && improvement >= (options.minImprovement ?? 0.03)
+    && after.score <= before.score * 0.97
+    && outerAfter.total <= outerBefore.total * 1.005
+    && outerAfter.luma <= outerBefore.luma * 1.008
+    && outerAfter.chroma <= outerBefore.chroma * 1.006;
   return {
     width: image.width,
     height: image.height,
@@ -228,7 +256,10 @@ export function applyLocalToneMatch(image, alphaMap, options = {}) {
       correctedPixels: accepted ? pass.correctedPixels : 0,
       candidatePixels: pass.correctedPixels,
       meanAbsShift: accepted ? pass.meanAbsShift : 0,
-      requestedShift: pass.requestedShift
+      meanLocalAdaptation: accepted ? pass.meanLocalAdaptation : 0,
+      requestedShift: pass.requestedShift,
+      localMix: pass.localMix,
+      maxLocalShift: pass.maxLocalShift
     }
   };
 }
