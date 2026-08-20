@@ -33,7 +33,7 @@ function mountBatchPanel(doc = document) {
     </div>
     <div class="muted batch-folder">Output folder: <strong id="batchOutputFolderName">Not selected — results stay available as individual downloads.</strong></div>
     <div id="batchQueue" class="batch-queue"></div>
-    <p class="muted batch-note">After selecting multiple videos, each file is auto-detected sequentially and shows its own original/cleaned watermark preview before Clean all. Cached detection is reused during cleaning when the settings have not changed.</p>`;
+    <p class="muted batch-note">After selecting multiple videos, each file is auto-detected sequentially and shows its own original/cleaned watermark preview before Clean all. Cached detection is reused during cleaning when the settings have not changed. A single worker is reused across the queue and transient worker/network failures are retried automatically.</p>`;
   exportPanel.after(panel);
 
   const style = doc.createElement('style');
