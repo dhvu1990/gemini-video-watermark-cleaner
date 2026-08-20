@@ -1,4 +1,5 @@
 import { measurePostCleanupResidual } from './edgeBridge.js';
+import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -238,14 +239,27 @@ export function applyLocalToneMatch(image, alphaMap, options = {}) {
   }
   const before = measureLocalToneMismatch(image, alphaMap, options);
   const outerBefore = measurePostCleanupResidual(image, alphaMap);
+  const crossingEdge = measureCrossingSceneEdgeRisk(image, alphaMap, options.sceneEdgeOptions || {});
   const minSamples = Math.max(8, Number(options.minSamples ?? 18));
   const minReferenceSamples = Math.max(12, Number(options.minReferenceSamples ?? 24));
   const minScore = Number.isFinite(options.minScore) ? options.minScore : 1.05;
   const regionalScore = Math.max(before.score, Math.min(8, Number(before.sectorSpread || 0) * 0.35));
-  if (!before.plane || before.samples < minSamples || before.referenceSamples < minReferenceSamples || regionalScore < minScore) {
+  if (crossingEdge.protect || !before.plane || before.samples < minSamples || before.referenceSamples < minReferenceSamples || regionalScore < minScore) {
     return {
       width: image.width, height: image.height, data: new Uint8ClampedArray(image.data),
-      localToneMatch: { enabled: true, attempted: false, accepted: false, before, after: before, outerBefore, outerAfter: outerBefore, correctedPixels: 0, improvement: 0 }
+      localToneMatch: {
+        enabled: true,
+        attempted: false,
+        accepted: false,
+        reason: crossingEdge.protect ? 'crossing-scene-edge-protection' : 'tone-gate-not-triggered',
+        crossingEdge,
+        before,
+        after: before,
+        outerBefore,
+        outerAfter: outerBefore,
+        correctedPixels: 0,
+        improvement: 0
+      }
     };
   }
   const pass = applyTonePass(image, alphaMap, before, options);
@@ -265,7 +279,11 @@ export function applyLocalToneMatch(image, alphaMap, options = {}) {
     height: image.height,
     data: accepted ? pass.image.data : new Uint8ClampedArray(image.data),
     localToneMatch: {
-      enabled: true, attempted: true, accepted,
+      enabled: true,
+      attempted: true,
+      accepted,
+      reason: accepted ? 'accepted' : 'candidate-rejected',
+      crossingEdge,
       before,
       after: accepted ? after : before,
       candidateAfter: after,
