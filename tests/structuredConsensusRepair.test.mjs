@@ -39,6 +39,22 @@ function meanDelta(a, b) {
   return sum / (a.width * a.height * 3);
 }
 
+function meanVerticalBoundaryDelta(a, b, alpha, centerX, radius = 1) {
+  let sum = 0;
+  let count = 0;
+  for (let y = 0; y < a.height; y++) {
+    for (let x = Math.max(0, centerX - radius); x <= Math.min(a.width - 1, centerX + radius); x++) {
+      if ((alpha[y * a.width + x] || 0) < 0.025) continue;
+      const i = (y * a.width + x) * 4;
+      sum += Math.abs(a.data[i] - b.data[i]);
+      sum += Math.abs(a.data[i + 1] - b.data[i + 1]);
+      sum += Math.abs(a.data[i + 2] - b.data[i + 2]);
+      count += 3;
+    }
+  }
+  return count ? sum / count : 0;
+}
+
 test('structured consensus candidate never accepts a worse post-clean residual', () => {
   const width = 48, height = 48;
   const alpha = diamondAlpha(width, height);
@@ -87,5 +103,27 @@ test('conflicting high-detail background cannot be accepted unless measured resi
     assert.ok(info.after.chroma <= info.before.chroma * 1.008 + 1e-9);
   } else {
     assert.equal(meanDelta(result, source), 0);
+  }
+});
+
+test('structured consensus protects a real high-contrast scene boundary crossing the watermark', () => {
+  const width = 48, height = 48;
+  const alpha = diamondAlpha(width, height);
+  const boundaryX = 24;
+  const source = image(width, height, (x, y) => {
+    const p = y * width + x;
+    const base = x < boundaryX ? [232, 218, 190] : [74, 38, 118];
+    const ghost = alpha[p] >= 0.05 ? 5 : 0;
+    return base.map((value) => Math.min(255, value + ghost));
+  });
+  const result = applyStructuredConsensusRepair(source, alpha, { strength: 0.90 });
+  const info = result.structuredConsensus;
+  assert.equal(info.attempted, true);
+  assert.ok(info.crossingEdge);
+  assert.ok(info.sceneGuardedPixels > 0);
+  assert.ok(meanVerticalBoundaryDelta(result, source, alpha, boundaryX, 1) <= 1.5);
+  if (info.accepted && info.crossingEdge.protect) {
+    assert.ok(info.candidateAfter.chroma <= info.before.chroma * 1.002 + 1e-9);
+    assert.ok(info.candidateImprovement >= info.requiredImprovement - 1e-9);
   }
 });
