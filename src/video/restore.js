@@ -13,10 +13,11 @@ function smoothstep(edge0, edge1, value) {
 
 export function inverseAlphaRestore(roi, alphaMap, gain = 1) {
   const cap = buildAdaptiveAlphaUnderflowCap(roi, alphaMap, gain, { enabled: true });
+  const effectiveAlpha = cap.effectiveAlpha;
   const out = new Uint8ClampedArray(roi.data);
   const pixels = roi.width * roi.height;
   for (let p = 0; p < pixels; p++) {
-    const alpha = cap.effectiveAlpha[p] || 0;
+    const alpha = effectiveAlpha[p] || 0;
     if (alpha <= 0.002) continue;
     const idx = p * 4;
     const inv = 1 - alpha;
