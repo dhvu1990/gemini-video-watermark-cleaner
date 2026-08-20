@@ -1,9 +1,22 @@
 import { batchFileKey, batchOutputName, BATCH_STATUSES, runnableBatchItems, summarizeBatch } from './batch.js';
+import {
+  BATCH_WORKER_MAX_RETRIES,
+  batchWorkerRetryDelayMs,
+  shouldRetryBatchWorkerError
+} from './batchWorkerReliability.js';
 
 const ids = ['batchInput','chooseBatchBtn','batchQueue','batchSummary','batchCleanAllBtn','batchCancelBtn','batchOutputFolderBtn','batchOutputFolderName','batchNameMode'];
 const els = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
 
-const state = { items: [], outputDirectory: null, running: false, cancelled: false, activeWorker: null, ingesting: false };
+const state = {
+  items: [],
+  outputDirectory: null,
+  running: false,
+  cancelled: false,
+  activeWorker: null,
+  ingesting: false,
+  rerunRequested: false
+};
 
 function settingNumber(id, fallback) {
   const value = Number(document.getElementById(id)?.value);
@@ -39,7 +52,17 @@ function inspectOptions() {
 }
 
 function makeItem(file) {
-  return { key: batchFileKey(file), file, status: BATCH_STATUSES.QUEUED, progress: 0, phase: 'Waiting', error: '', detection: null, outputUrl: null, outputName: batchOutputName(file.name, els.batchNameMode?.value || 'cleaned') };
+  return {
+    key: batchFileKey(file),
+    file,
+    status: BATCH_STATUSES.QUEUED,
+    progress: 0,
+    phase: 'Waiting',
+    error: '',
+    detection: null,
+    outputUrl: null,
+    outputName: batchOutputName(file.name, els.batchNameMode?.value || 'cleaned')
+  };
 }
 function nextFrame() {
   return new Promise((resolve) => {
@@ -47,6 +70,8 @@ function nextFrame() {
     else setTimeout(resolve, 0);
   });
 }
+function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
 async function addFilesDeferred(files) {
   const selected = Array.from(files || []);
   if (!selected.length || state.running || state.ingesting) return;
@@ -79,9 +104,19 @@ function removeItem(key) {
 }
 function retryItem(key) {
   const item = state.items.find((entry) => entry.key === key);
-  if (!item || state.running || state.ingesting) return;
-  item.status = BATCH_STATUSES.QUEUED; item.progress = 0; item.phase = 'Waiting'; item.error = '';
+  if (!item || state.ingesting) return;
+  if (item.status !== BATCH_STATUSES.ERROR && item.status !== BATCH_STATUSES.CANCELLED) return;
+  item.status = BATCH_STATUSES.QUEUED;
+  item.progress = 0;
+  item.phase = state.running ? 'Retry queued' : 'Waiting';
+  item.error = '';
   item.detection = null;
+  state.cancelled = false;
+  if (state.running) {
+    state.rerunRequested = true;
+    render();
+    return;
+  }
   render();
   setTimeout(() => runBatch(), 0);
 }
@@ -92,6 +127,7 @@ function statusLabel(item) {
   if (item.status === BATCH_STATUSES.DONE) return 'Ready to download';
   if (item.status === BATCH_STATUSES.ERROR) return `Error: ${item.error || 'Processing failed'}`;
   if (item.status === BATCH_STATUSES.CANCELLED) return 'Cancelled';
+  if (item.phase === 'Retry queued') return 'Retry queued';
   return 'Waiting';
 }
 function render() {
@@ -115,35 +151,114 @@ function render() {
   }
 }
 
-function runWorker(type, file, options, onProgress) {
+function disposeBatchWorker(worker = state.activeWorker) {
+  if (!worker) return;
+  try { worker.terminate(); } catch {}
+  if (state.activeWorker === worker) state.activeWorker = null;
+}
+function getBatchWorker() {
+  if (state.activeWorker) return state.activeWorker;
+  const worker = new Worker(new URL('./video/worker.js', import.meta.url), { type: 'module' });
+  state.activeWorker = worker;
+  return worker;
+}
+function workerTransportError(message) {
+  const error = new Error(message || 'Worker transport failed');
+  error.code = 'BATCH_WORKER_TRANSPORT';
+  return error;
+}
+function runWorkerOnce(type, file, options, onProgress) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./video/worker.js', import.meta.url), { type: 'module' });
-    state.activeWorker = worker;
+    const worker = getBatchWorker();
     const tag = `batch:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    worker.onmessage = (event) => {
+    let settled = false;
+    const cleanup = () => {
+      worker.removeEventListener('message', onMessage);
+      worker.removeEventListener('error', onError);
+      worker.removeEventListener('messageerror', onMessageError);
+    };
+    const finishResolve = (value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onMessage = (event) => {
       const message = event.data || {};
       if (message.tag !== tag) return;
       if (message.type === 'progress') { onProgress?.(message); return; }
-      if (message.type === 'inspect-result' || message.type === 'process-result') { worker.terminate(); if (state.activeWorker === worker) state.activeWorker = null; resolve(message); }
-      else if (message.type === 'cancelled') { worker.terminate(); if (state.activeWorker === worker) state.activeWorker = null; reject(new DOMException('Cancelled', 'AbortError')); }
-      else if (message.type === 'error') { worker.terminate(); if (state.activeWorker === worker) state.activeWorker = null; reject(new Error(message.error || 'Worker failed')); }
+      if (message.type === 'inspect-result' || message.type === 'process-result') finishResolve(message);
+      else if (message.type === 'cancelled') finishReject(new DOMException('Cancelled', 'AbortError'));
+      else if (message.type === 'error') finishReject(new Error(message.error || 'Worker failed'));
     };
-    worker.onerror = (event) => { worker.terminate(); if (state.activeWorker === worker) state.activeWorker = null; reject(new Error(event.message || 'Worker failed')); };
-    worker.postMessage({ type, tag, file, options });
+    const onError = (event) => {
+      disposeBatchWorker(worker);
+      finishReject(workerTransportError(event?.message || 'Worker network/module error'));
+    };
+    const onMessageError = () => {
+      disposeBatchWorker(worker);
+      finishReject(workerTransportError('Worker message transport error'));
+    };
+    worker.addEventListener('message', onMessage);
+    worker.addEventListener('error', onError);
+    worker.addEventListener('messageerror', onMessageError);
+    try { worker.postMessage({ type, tag, file, options }); }
+    catch (error) { disposeBatchWorker(worker); finishReject(error); }
   });
 }
+async function runWorker(type, file, options, onProgress) {
+  let retriesUsed = 0;
+  while (true) {
+    try {
+      return await runWorkerOnce(type, file, options, onProgress);
+    } catch (error) {
+      if (!shouldRetryBatchWorkerError(error, retriesUsed, BATCH_WORKER_MAX_RETRIES)) throw error;
+      retriesUsed += 1;
+      disposeBatchWorker();
+      onProgress?.({
+        status: `Transient network/worker error — reconnecting ${retriesUsed}/${BATCH_WORKER_MAX_RETRIES}`,
+        progress: 0
+      });
+      await wait(batchWorkerRetryDelayMs(retriesUsed));
+    }
+  }
+}
 
-async function saveBlob(item, blob) {
+async function saveBlobOnce(item, blob) {
   item.outputName = batchOutputName(item.file.name, els.batchNameMode?.value || 'cleaned');
   if (state.outputDirectory) {
     const handle = await state.outputDirectory.getFileHandle(item.outputName, { create: true });
     const writable = await handle.createWritable();
-    try { await writable.write(blob); } finally { await writable.close(); }
+    try { await writable.write(blob); }
+    catch (error) {
+      try { await writable.abort?.(); } catch {}
+      throw error;
+    }
+    finally { try { await writable.close(); } catch {} }
     item.status = BATCH_STATUSES.SAVED;
   } else {
     if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
     item.outputUrl = URL.createObjectURL(blob);
     item.status = BATCH_STATUSES.DONE;
+  }
+}
+async function saveBlob(item, blob) {
+  let retriesUsed = 0;
+  while (true) {
+    try { return await saveBlobOnce(item, blob); }
+    catch (error) {
+      if (!shouldRetryBatchWorkerError(error, retriesUsed, 1)) throw error;
+      retriesUsed += 1;
+      item.phase = 'Retrying save';
+      render();
+      await wait(batchWorkerRetryDelayMs(retriesUsed));
+    }
   }
 }
 
@@ -164,13 +279,26 @@ async function runBatch() {
   if (state.running || state.ingesting) return;
   const queue = runnableBatchItems(state.items);
   if (!queue.length) return;
-  state.running = true; state.cancelled = false; render();
+  state.running = true;
+  state.cancelled = false;
+  state.rerunRequested = false;
+  render();
   for (const item of queue) {
     if (state.cancelled) { if (item.status === BATCH_STATUSES.QUEUED) item.status = BATCH_STATUSES.CANCELLED; continue; }
     try { await processOne(item); }
-    catch (error) { item.status = error?.name === 'AbortError' ? BATCH_STATUSES.CANCELLED : BATCH_STATUSES.ERROR; item.error = error?.message || String(error); item.phase = item.status === BATCH_STATUSES.CANCELLED ? 'Cancelled' : 'Error'; render(); }
+    catch (error) {
+      item.status = error?.name === 'AbortError' ? BATCH_STATUSES.CANCELLED : BATCH_STATUSES.ERROR;
+      item.error = error?.message || String(error);
+      item.phase = item.status === BATCH_STATUSES.CANCELLED ? 'Cancelled' : 'Error';
+      render();
+    }
+    if (state.rerunRequested && !state.cancelled) break;
   }
-  state.running = false; state.activeWorker = null; render();
+  const resumeQueuedRetry = state.rerunRequested && !state.cancelled;
+  state.running = false;
+  state.rerunRequested = false;
+  render();
+  if (resumeQueuedRetry) setTimeout(() => runBatch(), 0);
 }
 
 async function chooseOutputFolder() {
@@ -187,8 +315,15 @@ els.batchInput?.addEventListener('change', () => {
   setTimeout(() => addFilesDeferred(selected), 0);
 });
 els.batchCleanAllBtn?.addEventListener('click', runBatch);
-els.batchCancelBtn?.addEventListener('click', () => { state.cancelled = true; state.activeWorker?.postMessage({ type: 'cancel' }); });
+els.batchCancelBtn?.addEventListener('click', () => {
+  state.cancelled = true;
+  state.rerunRequested = false;
+  state.activeWorker?.postMessage({ type: 'cancel' });
+});
 els.batchOutputFolderBtn?.addEventListener('click', chooseOutputFolder);
 els.batchNameMode?.addEventListener('change', () => { for (const item of state.items) item.outputName = batchOutputName(item.file.name, els.batchNameMode.value); render(); });
-window.addEventListener('beforeunload', () => { for (const item of state.items) if (item.outputUrl) URL.revokeObjectURL(item.outputUrl); state.activeWorker?.terminate(); });
+window.addEventListener('beforeunload', () => {
+  for (const item of state.items) if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
+  disposeBatchWorker();
+});
 render();
