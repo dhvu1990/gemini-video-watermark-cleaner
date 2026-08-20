@@ -24,6 +24,7 @@ export function formatAntiStreakTelemetry(summary = null) {
   const atlas = summary?.atlas || {};
   const structured = summary?.structured || {};
   const footprint = structured?.footprint || {};
+  const adjacency = structured?.highContrastAdjacency || {};
   const footprintRisk = classifyStructuredFootprintRisk(footprint);
   const flags = Array.isArray(summary?.riskFlags) ? summary.riskFlags.filter(Boolean) : [];
 
@@ -52,7 +53,15 @@ export function formatAntiStreakTelemetry(summary = null) {
     footprintContinuity: percent(footprint.continuityMean),
     footprintClass: footprintRisk.level === 'insufficient' ? '-' : footprintRisk.level.toUpperCase(),
     footprintEvidence: footprintRisk.level === 'insufficient' ? '-' : percent(footprintRisk.evidence),
-    footprintReason: footprintRisk.level === 'insufficient' ? footprintRisk.reason : footprintRisk.reason
+    footprintReason: footprintRisk.reason,
+    adjacencyScore: fixed(adjacency.score, 3),
+    adjacencyEdgeDensity: percent(adjacency.edgeDensity),
+    adjacencyStraddleDensity: percent(adjacency.straddleDensity),
+    adjacencyMeanContrast: fixed(adjacency.meanContrast, 2),
+    adjacencyP90Contrast: fixed(adjacency.p90Contrast, 2),
+    adjacencyShapeAlignment: percent(adjacency.shapeAlignment),
+    adjacencyLevel: adjacency.level ? String(adjacency.level).toUpperCase() : '-',
+    adjacencyReason: adjacency.reason || '-'
   };
 }
 
