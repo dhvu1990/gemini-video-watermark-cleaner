@@ -1,4 +1,5 @@
 import { enhanceAlphaEdges } from './alpha.js';
+import { applyDarkUnderflowGuard } from './darkUnderflowGuard.js';
 
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -23,7 +24,14 @@ export function inverseAlphaRestore(roi, alphaMap, gain = 1) {
     out[idx + 1] = clampByte((roi.data[idx + 1] - alpha * 255) / inv);
     out[idx + 2] = clampByte((roi.data[idx + 2] - alpha * 255) / inv);
   }
-  return { width: roi.width, height: roi.height, data: out };
+  const restored = { width: roi.width, height: roi.height, data: out };
+  const guarded = applyDarkUnderflowGuard(restored, roi, alphaMap, { enabled: true });
+  return {
+    width: guarded.width,
+    height: guarded.height,
+    data: guarded.data,
+    darkUnderflowGuard: guarded.darkUnderflowGuard || null
+  };
 }
 
 function alphaEdgeMap(alphaMap, width, height) {
