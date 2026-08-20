@@ -21,9 +21,7 @@ export function summarizeStructuredRingDiagnostics(structuredRing = {}, pixelCou
   const samples = Math.max(0, Math.round(finiteOr(alignedBefore.samples, 0)));
   const safePixelCount = Math.max(0, Math.round(finiteOr(pixelCount, 0)));
   const sampleDensity = safePixelCount > 0 ? Math.min(1, samples / safePixelCount) : 0;
-  const alignedImprovement = beforeScore > 1e-9
-    ? (beforeScore - afterScore) / beforeScore
-    : 0;
+  const alignedImprovement = beforeScore > 1e-9 ? (beforeScore - afterScore) / beforeScore : 0;
 
   return {
     enabled: structuredRing?.enabled !== false,
@@ -57,6 +55,7 @@ export function summarizeStructuredRingDiagnostics(structuredRing = {}, pixelCou
     shapeGhost: stageSummary(structuredRing?.shapeGhost),
     centerSeam: stageSummary(structuredRing?.centerSeam),
     localToneMatch: stageSummary(structuredRing?.localToneMatch),
-    outerHalo: stageSummary(structuredRing?.outerHalo)
+    outerHalo: stageSummary(structuredRing?.outerHalo),
+    protectedResidualRescue: stageSummary(structuredRing?.protectedResidualRescue)
   };
 }
