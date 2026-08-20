@@ -1,5 +1,6 @@
 import { buildHybridRepairMask } from './textureRepair.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
+import { measureCrossingSceneEdgeRisk, sceneEdgeProtectionAt } from './sceneEdgeProtection.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -78,6 +79,7 @@ function localStructure(image, x, y) {
 function applyConsensusPass(image, alphaMap, options = {}) {
   const strength = clamp(Number(options.strength ?? 0.72), 0, 1);
   const maxSpread = Number.isFinite(options.maxSpread) ? options.maxSpread : 22;
+  const hardSceneGuard = Number.isFinite(options.hardSceneGuard) ? options.hardSceneGuard : 0.58;
   const masks = buildHybridRepairMask(alphaMap, image.width, image.height);
   const out = new Uint8ClampedArray(image.data);
   const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
@@ -86,12 +88,20 @@ function applyConsensusPass(image, alphaMap, options = {}) {
   let supportSum = 0;
   let spreadSum = 0;
   let blendSum = 0;
+  let sceneGuardedPixels = 0;
+  let sceneProtectionSum = 0;
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
       const p = y * image.width + x;
       const alpha = alphaMap[p] || 0;
       if (alpha < 0.008) continue;
+
+      const sceneProtection = sceneEdgeProtectionAt(image, alphaMap, x, y, options.sceneEdgeOptions || {});
+      if (sceneProtection.weight >= hardSceneGuard) {
+        sceneGuardedPixels++;
+        continue;
+      }
 
       const predictions = directions
         .map(([dx, dy]) => pairPrediction(image, alphaMap, x, y, dx, dy))
@@ -105,6 +115,7 @@ function applyConsensusPass(image, alphaMap, options = {}) {
       const support = clamp((predictions.length - 1) / 3, 0, 1);
       const structureGuard = smoothstep(26, 74, localStructure(image, x, y));
       const spanGuard = smoothstep(15, 30, consensus.span);
+      const sceneGate = 1 - sceneProtection.weight * 0.96;
 
       const edge = masks.edge[p] || 0;
       const feather = masks.feather[p] || 0;
@@ -120,7 +131,7 @@ function applyConsensusPass(image, alphaMap, options = {}) {
       const blend = Math.min(
         core > 0.45 ? 0.58 : 0.72,
         strength * regionWeight * spreadGate * anchorGate * support * residualGate
-          * (1 - structureGuard * 0.84) * (1 - spanGuard * 0.30)
+          * sceneGate * (1 - structureGuard * 0.84) * (1 - spanGuard * 0.30)
       );
       if (blend < 0.045) continue;
 
@@ -133,6 +144,7 @@ function applyConsensusPass(image, alphaMap, options = {}) {
       supportSum += predictions.length;
       spreadSum += consensus.spread;
       blendSum += blend;
+      sceneProtectionSum += sceneProtection.weight;
     }
   }
 
@@ -140,6 +152,8 @@ function applyConsensusPass(image, alphaMap, options = {}) {
     image: { width: image.width, height: image.height, data: out },
     correctedPixels,
     corePixels,
+    sceneGuardedPixels,
+    meanSceneProtection: correctedPixels ? sceneProtectionSum / correctedPixels : 0,
     meanDirectionalSupport: correctedPixels ? supportSum / correctedPixels : 0,
     meanSpread: correctedPixels ? spreadSum / correctedPixels : 0,
     meanBlend: correctedPixels ? blendSum / correctedPixels : 0
@@ -157,14 +171,19 @@ export function applyStructuredConsensusRepair(image, alphaMap, options = {}) {
   }
 
   const before = measurePostCleanupResidual(image, alphaMap);
+  const crossingEdge = measureCrossingSceneEdgeRisk(image, alphaMap, options.sceneEdgeOptions || {});
   const pass = applyConsensusPass(image, alphaMap, options);
   const candidateAfter = measurePostCleanupResidual(pass.image, alphaMap);
   const improvement = before.total > 1e-6 ? (before.total - candidateAfter.total) / before.total : 0;
+  const requiredImprovement = crossingEdge.protect
+    ? (options.crossingEdgeMinImprovement ?? 0.006)
+    : (options.minImprovement ?? 0.003);
+  const chromaLimit = crossingEdge.protect ? 1.002 : 1.008;
   const accepted = pass.correctedPixels > 0
     && candidateAfter.total <= before.total * 0.997
     && candidateAfter.luma <= before.luma * 1.008
-    && candidateAfter.chroma <= before.chroma * 1.008
-    && improvement >= 0.003;
+    && candidateAfter.chroma <= before.chroma * chromaLimit
+    && improvement >= requiredImprovement;
   const selected = accepted ? pass.image : image;
 
   return {
@@ -178,10 +197,15 @@ export function applyStructuredConsensusRepair(image, alphaMap, options = {}) {
       before,
       after: accepted ? candidateAfter : before,
       candidateAfter,
+      crossingEdge,
       improvement: accepted ? improvement : 0,
+      candidateImprovement: improvement,
+      requiredImprovement,
       correctedPixels: accepted ? pass.correctedPixels : 0,
       candidatePixels: pass.correctedPixels,
       corePixels: accepted ? pass.corePixels : 0,
+      sceneGuardedPixels: pass.sceneGuardedPixels,
+      meanSceneProtection: accepted ? pass.meanSceneProtection : 0,
       meanDirectionalSupport: pass.meanDirectionalSupport,
       meanSpread: pass.meanSpread,
       meanBlend: accepted ? pass.meanBlend : 0
