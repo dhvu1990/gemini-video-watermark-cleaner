@@ -98,12 +98,12 @@ test('true near-black clean background is not artificially lifted', () => {
   assert.deepEqual(Array.from(result.data), Array.from(restored.data));
 });
 
-test('strong real boundary through the footprint remains guarded instead of being painted flat', () => {
+test('strong real boundary through the footprint is not flattened by the guard', () => {
   const width = 72, height = 72;
   const alpha = diamondAlpha(width, height, 0.50);
-  const base = makeImage(width, height, (x) => x < width / 2 ? [22, 24, 28] : [72, 74, 78]);
-  const composite = compositeWhite(base, alpha);
-  const result = inverseAlphaRestore(composite, alpha, 1.28);
+  const original = makeImage(width, height, (x) => x < width / 2 ? [28, 30, 34] : [82, 84, 88]);
+  const restored = makeImage(width, height, (x) => x < width / 2 ? [4, 5, 6] : [58, 60, 64]);
+  const result = applyDarkUnderflowGuard(restored, original, alpha);
   let left = 0, right = 0, leftN = 0, rightN = 0;
   for (let y = 26; y <= 46; y++) {
     for (let x = 28; x <= 43; x++) {
@@ -114,5 +114,5 @@ test('strong real boundary through the footprint remains guarded instead of bein
       if (x < width / 2) { left += lum; leftN++; } else { right += lum; rightN++; }
     }
   }
-  assert.ok(right / rightN - left / leftN > 12, JSON.stringify({ left: left / leftN, right: right / rightN, guard: result.darkUnderflowGuard }));
+  assert.ok(right / rightN - left / leftN > 35, JSON.stringify({ left: left / leftN, right: right / rightN, guard: result.darkUnderflowGuard }));
 });
