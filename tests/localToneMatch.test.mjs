@@ -86,6 +86,32 @@ test('local tone match backs off on a high-detail checkerboard scene', () => {
   assert.deepEqual(Array.from(result.data), Array.from(before));
 });
 
+test('crossing scene edge blocks footprint-wide local tone correction', () => {
+  const width = 81, height = 81;
+  const alpha = new Float32Array(width * height);
+  const cx = (width - 1) / 2;
+  const cy = (height - 1) / 2;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const d = Math.abs(x - cx) + Math.abs(y - cy);
+      if (d <= 14) alpha[y * width + x] = 0.52;
+      else if (d <= 17) alpha[y * width + x] = 0.22;
+      else if (d <= 20) alpha[y * width + x] = 0.07;
+    }
+  }
+  const src = image(width, height, (x, y) => {
+    const line = Math.abs(y - (0.58 * x + 16)) <= 1.4;
+    const base = [72 + x * 0.18, 144 + y * 0.12, 204 + x * 0.06];
+    return line ? [30, 42, 54] : base;
+  });
+  const before = new Uint8ClampedArray(src.data);
+  const result = applyLocalToneMatch(src, alpha, { minScore: 0.1 });
+  assert.equal(result.localToneMatch.attempted, false, JSON.stringify(result.localToneMatch));
+  assert.equal(result.localToneMatch.reason, 'crossing-scene-edge-protection');
+  assert.equal(result.localToneMatch.crossingEdge.protect, true);
+  assert.deepEqual(Array.from(result.data), Array.from(before));
+});
+
 test('invalid alpha geometry returns an unchanged no-op', () => {
   const src = image(16, 16, () => [100, 120, 140]);
   const result = applyLocalToneMatch(src, new Float32Array(8));
