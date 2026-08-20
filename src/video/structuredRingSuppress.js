@@ -6,6 +6,7 @@ import { applyCenterSeamSuppression } from './centerSeamSuppress.js';
 import { applyLocalToneMatch } from './localToneMatch.js';
 import { applyOuterHaloSuppression } from './outerHaloSuppress.js';
 import { buildStructuredEvidenceCandidate } from './structuredEvidenceRefine.js';
+import { applyProtectedResidualRescue } from './protectedResidualRescue.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -253,33 +254,21 @@ function applyEvidenceGatedRefinement(image, alphaMap, options = {}) {
 }
 
 function finishWithShapeGhost(image, alphaMap, options) {
-  if (options.shapeGhost === false) {
-    return { width: image.width, height: image.height, data: image.data, shapeGhost: { enabled: false, attempted: false, accepted: false } };
-  }
+  if (options.shapeGhost === false) return { width: image.width, height: image.height, data: image.data, shapeGhost: { enabled: false, attempted: false, accepted: false } };
   return applyShapeGhostSuppression(image, alphaMap, { enabled: true, ...(options.shapeGhostOptions || {}) });
 }
-
 function finishWithCenterSeam(image, alphaMap, options) {
-  if (options.centerSeam === false) {
-    return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), centerSeam: { enabled: false, attempted: false, accepted: false } };
-  }
+  if (options.centerSeam === false) return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), centerSeam: { enabled: false, attempted: false, accepted: false } };
   return applyCenterSeamSuppression(image, alphaMap, { enabled: true, ...(options.centerSeamOptions || {}) });
 }
-
 function finishWithLocalTone(image, alphaMap, options) {
-  if (options.localToneMatch === false) {
-    return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), localToneMatch: { enabled: false, attempted: false, accepted: false } };
-  }
+  if (options.localToneMatch === false) return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), localToneMatch: { enabled: false, attempted: false, accepted: false } };
   return applyLocalToneMatch(image, alphaMap, { enabled: true, ...(options.localToneOptions || {}) });
 }
-
 function finishWithOuterHalo(image, alphaMap, options) {
-  if (options.outerHalo === false) {
-    return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), outerHalo: { enabled: false, attempted: false, accepted: false } };
-  }
+  if (options.outerHalo === false) return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), outerHalo: { enabled: false, attempted: false, accepted: false } };
   return applyOuterHaloSuppression(image, alphaMap, { enabled: true, ...(options.outerHaloOptions || {}) });
 }
-
 function appendMode(baseMode, suffix, accepted) {
   if (!accepted) return baseMode;
   return baseMode && baseMode !== 'none' ? `${baseMode}+${suffix}` : suffix;
@@ -289,15 +278,11 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   if (options.enabled === false || alphaMap.length !== image.width * image.height) {
     return { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredRing: { enabled: false, attempted: false, accepted: false } };
   }
-
   const consensusResult = options.consensus === false
     ? { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data), structuredConsensus: { enabled: false, attempted: false, accepted: false } }
     : applyStructuredConsensusRepair(image, alphaMap, { enabled: true, ...(options.consensusOptions || {}) });
   const consensus = consensusResult.structuredConsensus || { enabled: true, attempted: true, accepted: false };
-  const working = consensus.accepted
-    ? { width: consensusResult.width, height: consensusResult.height, data: consensusResult.data }
-    : image;
-
+  const working = consensus.accepted ? { width: consensusResult.width, height: consensusResult.height, data: consensusResult.data } : image;
   const before = measurePostCleanupResidual(working, alphaMap);
   const alignedBefore = measureStructuredRingResidual(working, alphaMap);
   const totalThreshold = Number.isFinite(options.totalThreshold) ? options.totalThreshold : 0.80;
@@ -306,9 +291,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   if (!shouldAttempt) {
     const ghostResult = finishWithShapeGhost(working, alphaMap, options);
     const shapeGhost = ghostResult.shapeGhost || { enabled: true, attempted: true, accepted: false };
-    let selected = shapeGhost.accepted
-      ? { width: ghostResult.width, height: ghostResult.height, data: ghostResult.data }
-      : working;
+    let selected = shapeGhost.accepted ? { width: ghostResult.width, height: ghostResult.height, data: ghostResult.data } : working;
     const seamResult = finishWithCenterSeam(selected, alphaMap, options);
     const centerSeam = seamResult.centerSeam || { enabled: true, attempted: true, accepted: false };
     if (centerSeam.accepted) selected = { width: seamResult.width, height: seamResult.height, data: seamResult.data };
@@ -318,40 +301,15 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     const haloResult = finishWithOuterHalo(selected, alphaMap, options);
     const outerHalo = haloResult.outerHalo || { enabled: true, attempted: true, accepted: false };
     if (outerHalo.accepted) selected = { width: haloResult.width, height: haloResult.height, data: haloResult.data };
-    const refinement = {
-      enabled: options.evidenceRefinement !== false,
-      attempted: false,
-      accepted: false,
-      reason: 'primary-gate-not-triggered'
-    };
+    const refinement = { enabled: options.evidenceRefinement !== false, attempted: false, accepted: false, reason: 'primary-gate-not-triggered' };
+    const protectedResidualRescue = { enabled: options.protectedResidualRescue !== false, attempted: false, accepted: false, reason: 'primary-gate-not-triggered' };
     let acceptedMode = shapeGhost.accepted ? 'shape-ghost' : (consensus.accepted ? 'consensus' : 'none');
     acceptedMode = appendMode(acceptedMode, 'center-seam', centerSeam.accepted);
     acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
     acceptedMode = appendMode(acceptedMode, 'outer-halo', outerHalo.accepted);
     return {
-      width: selected.width,
-      height: selected.height,
-      data: selected === image ? new Uint8ClampedArray(image.data) : selected.data,
-      structuredRing: {
-        enabled: true,
-        attempted: false,
-        accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted,
-        acceptedMode,
-        before,
-        after: before,
-        alignedBefore,
-        alignedAfter: alignedBefore,
-        improvement: 0,
-        correctedPixels: 0,
-        salvageAttempted: false,
-        salvageAccepted: false,
-        refinement,
-        consensus,
-        shapeGhost,
-        centerSeam,
-        localToneMatch,
-        outerHalo
-      }
+      width: selected.width, height: selected.height, data: selected === image ? new Uint8ClampedArray(image.data) : selected.data,
+      structuredRing: { enabled: true, attempted: false, accepted: consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted, acceptedMode, before, after: before, alignedBefore, alignedAfter: alignedBefore, improvement: 0, correctedPixels: 0, salvageAttempted: false, salvageAccepted: false, refinement, protectedResidualRescue, consensus, shapeGhost, centerSeam, localToneMatch, outerHalo }
     };
   }
 
@@ -370,11 +328,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   let finalCorrectedPixels = accepted ? pass.correctedPixels : 0;
   let finalMeanBlend = accepted ? pass.meanBlend : 0;
   let finalMeanAbsLumaDelta = accepted ? pass.meanAbsLumaDelta : 0;
-  let salvageAttempted = false;
-  let salvageAccepted = false;
-  let salvageCandidateAfter = null;
-  let salvageCandidateAlignedAfter = null;
-  let salvageCandidatePixels = 0;
+  let salvageAttempted = false, salvageAccepted = false, salvageCandidateAfter = null, salvageCandidateAlignedAfter = null, salvageCandidatePixels = 0;
   const nearMissRatio = before.total > 1e-6 ? after.total / before.total : 1;
   const salvageEnabled = options.microSalvage !== false;
   const nearMiss = !accepted && pass.correctedPixels > 0 && nearMissRatio <= (Number.isFinite(options.salvageNearMissRatio) ? options.salvageNearMissRatio : 1.025) && after.luma <= before.luma * 1.025;
@@ -389,15 +343,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     const salvageAlignedImprovement = alignedBefore.score > 1e-6 ? (alignedBefore.score - salvageCandidateAlignedAfter.score) / alignedBefore.score : 0;
     const salvageGood = salvagePass.correctedPixels > 0 && salvageCandidateAfter.total <= before.total * 0.998 && salvageCandidateAfter.luma <= before.luma * 1.002 && salvageCandidateAfter.chroma <= before.chroma * 1.01 && salvageCandidateAlignedAfter.score <= alignedBefore.score * 1.003 && (salvageImprovement >= 0.002 || salvageAlignedImprovement >= 0.008);
     if (salvageGood) {
-      salvageAccepted = true;
-      selected = salvagePass.image;
-      finalAfter = salvageCandidateAfter;
-      finalAlignedAfter = salvageCandidateAlignedAfter;
-      finalImprovement = salvageImprovement;
-      finalAlignedImprovement = salvageAlignedImprovement;
-      finalCorrectedPixels = salvagePass.correctedPixels;
-      finalMeanBlend = salvagePass.meanBlend;
-      finalMeanAbsLumaDelta = salvagePass.meanAbsLumaDelta;
+      salvageAccepted = true; selected = salvagePass.image; finalAfter = salvageCandidateAfter; finalAlignedAfter = salvageCandidateAlignedAfter; finalImprovement = salvageImprovement; finalAlignedImprovement = salvageAlignedImprovement; finalCorrectedPixels = salvagePass.correctedPixels; finalMeanBlend = salvagePass.meanBlend; finalMeanAbsLumaDelta = salvagePass.meanAbsLumaDelta;
     }
   }
 
@@ -405,22 +351,31 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   const ghostResult = finishWithShapeGhost(selected, alphaMap, options);
   const shapeGhost = ghostResult.shapeGhost || { enabled: true, attempted: true, accepted: false };
   if (shapeGhost.accepted) selected = { width: ghostResult.width, height: ghostResult.height, data: ghostResult.data };
-
   const seamResult = finishWithCenterSeam(selected, alphaMap, options);
   const centerSeam = seamResult.centerSeam || { enabled: true, attempted: true, accepted: false };
   if (centerSeam.accepted) selected = { width: seamResult.width, height: seamResult.height, data: seamResult.data };
-
   const toneResult = finishWithLocalTone(selected, alphaMap, options);
   const localToneMatch = toneResult.localToneMatch || { enabled: true, attempted: true, accepted: false };
   if (localToneMatch.accepted) selected = { width: toneResult.width, height: toneResult.height, data: toneResult.data };
-
   const haloResult = finishWithOuterHalo(selected, alphaMap, options);
   const outerHalo = haloResult.outerHalo || { enabled: true, attempted: true, accepted: false };
   if (outerHalo.accepted) selected = { width: haloResult.width, height: haloResult.height, data: haloResult.data };
-
   const refinementResult = applyEvidenceGatedRefinement(selected, alphaMap, options);
   const refinement = refinementResult.state;
   if (refinement.accepted) selected = refinementResult.image;
+
+  const currentAligned = measureStructuredRingResidual(selected, alphaMap);
+  const currentAlignedImprovement = alignedBefore.score > 1e-6 ? (alignedBefore.score - currentAligned.score) / alignedBefore.score : 0;
+  const alignedDensity = alphaMap.length ? alignedBefore.samples / alphaMap.length : 0;
+  const rescueEligible = options.protectedResidualRescue !== false
+    && alignedBefore.score >= (options.rescueMinAlignedScore ?? 1.40)
+    && alignedDensity >= (options.rescueMinAlignedDensity ?? 0.010)
+    && currentAlignedImprovement <= (options.rescueMaxPriorImprovement ?? 0.12);
+  const rescueResult = rescueEligible
+    ? applyProtectedResidualRescue(selected, alphaMap, { enabled: true, ...(options.protectedResidualRescueOptions || {}) })
+    : { width: selected.width, height: selected.height, data: new Uint8ClampedArray(selected.data), protectedResidualRescue: { enabled: options.protectedResidualRescue !== false, attempted: false, accepted: false, reason: rescueEligible ? 'not-attempted' : 'dense-low-gain-gate-not-met', alignedDensity, currentAlignedImprovement } };
+  const protectedResidualRescue = rescueResult.protectedResidualRescue;
+  if (protectedResidualRescue.accepted) selected = { width: rescueResult.width, height: rescueResult.height, data: rescueResult.data };
 
   let acceptedMode = shapeGhost.accepted
     ? (accepted ? 'primary+shape-ghost' : (salvageAccepted ? 'micro-salvage+shape-ghost' : (consensus.accepted ? 'consensus+shape-ghost' : 'shape-ghost')))
@@ -429,6 +384,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
   acceptedMode = appendMode(acceptedMode, 'local-tone', localToneMatch.accepted);
   acceptedMode = appendMode(acceptedMode, 'outer-halo', outerHalo.accepted);
   acceptedMode = appendMode(acceptedMode, 'evidence-refine', refinement.accepted);
+  acceptedMode = appendMode(acceptedMode, 'protected-rescue', protectedResidualRescue.accepted);
 
   return {
     width: selected.width,
@@ -437,7 +393,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
     structuredRing: {
       enabled: true,
       attempted: true,
-      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted || refinement.accepted,
+      accepted: ringAccepted || consensus.accepted || shapeGhost.accepted || centerSeam.accepted || localToneMatch.accepted || outerHalo.accepted || refinement.accepted || protectedResidualRescue.accepted,
       ringAccepted,
       acceptedMode,
       before,
@@ -459,6 +415,7 @@ export function applyStructuredResidualRingSuppression(image, alphaMap, options 
       salvageCandidatePixels,
       salvageNearMissRatio: nearMissRatio,
       refinement,
+      protectedResidualRescue,
       consensus,
       shapeGhost,
       centerSeam,
