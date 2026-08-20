@@ -9,6 +9,24 @@ function hardUnsafe(analysis) {
     || analysis.coreStructureDensity > t.maxCoreStructureDensity * 1.35;
 }
 
+function preservationSafeSmooth(analysis, options = {}) {
+  if (!analysis?.safe || !analysis?.coefficients) return false;
+  const limits = {
+    maxComplexity: Number.isFinite(options.preserveMaxComplexity) ? options.preserveMaxComplexity : 0.31,
+    maxSurfaceMae: Number.isFinite(options.preserveMaxSurfaceMae) ? options.preserveMaxSurfaceMae : 7.4,
+    maxEdgeDensity: Number.isFinite(options.preserveMaxEdgeDensity) ? options.preserveMaxEdgeDensity : 0.075,
+    maxMeanGradient: Number.isFinite(options.preserveMaxMeanGradient) ? options.preserveMaxMeanGradient : 7.8,
+    maxMeanLaplacian: Number.isFinite(options.preserveMaxMeanLaplacian) ? options.preserveMaxMeanLaplacian : 5.8,
+    maxCoreStructureDensity: Number.isFinite(options.preserveMaxCoreStructureDensity) ? options.preserveMaxCoreStructureDensity : 0.145
+  };
+  return analysis.complexity <= limits.maxComplexity
+    && analysis.surfaceMae <= limits.maxSurfaceMae
+    && analysis.edgeDensity <= limits.maxEdgeDensity
+    && analysis.meanGradient <= limits.maxMeanGradient
+    && analysis.meanLaplacian <= limits.maxMeanLaplacian
+    && analysis.coreStructureDensity <= limits.maxCoreStructureDensity;
+}
+
 const sharedState = {
   mode: null,
   frames: 0,
@@ -29,10 +47,13 @@ export function resetAdaptiveFinishState() {
 
 export function stabilizeSmoothBackgroundMode(analysis, options = {}) {
   const state = sharedState;
-  const rawMode = analysis?.safe ? 'smooth-rebuild' : 'structured';
+  const rawSafe = Boolean(analysis?.safe);
+  const preservationSafe = preservationSafeSmooth(analysis, options);
+  const rawMode = rawSafe && preservationSafe ? 'smooth-rebuild' : 'structured';
+  const preservationBlocked = rawSafe && !preservationSafe;
   const enterFrames = Math.max(1, Math.round(options.enterFrames ?? 2));
   const exitFrames = Math.max(1, Math.round(options.exitFrames ?? 2));
-  const unsafeHard = rawMode === 'structured' && hardUnsafe(analysis);
+  const unsafeHard = rawMode === 'structured' && (preservationBlocked || hardUnsafe(analysis));
   state.frames++;
 
   if (!state.mode) {
@@ -45,7 +66,8 @@ export function stabilizeSmoothBackgroundMode(analysis, options = {}) {
       held: false,
       switched: false,
       hardUnsafe: unsafeHard,
-      reason: 'initial-frame',
+      preservationBlocked,
+      reason: preservationBlocked ? 'detail-preservation-entry-guard' : 'initial-frame',
       temporal: { enabled: true, mode: state.mode, rawMode, switches: 0, heldFrames: 0 }
     };
   }
@@ -96,7 +118,10 @@ export function stabilizeSmoothBackgroundMode(analysis, options = {}) {
     held,
     switched,
     hardUnsafe: unsafeHard,
-    reason: switched ? 'temporal-switch' : (held ? 'temporal-hold' : analysis?.reason || rawMode),
+    preservationBlocked,
+    reason: preservationBlocked
+      ? 'detail-preservation-entry-guard'
+      : (switched ? 'temporal-switch' : (held ? 'temporal-hold' : analysis?.reason || rawMode)),
     temporal: {
       enabled: true,
       mode: state.mode,

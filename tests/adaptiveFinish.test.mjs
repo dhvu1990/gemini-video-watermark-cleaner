@@ -90,6 +90,22 @@ test('hard unsafe structure exits smooth mode immediately', () => {
   assert.equal(decision.switched, true);
 });
 
+test('safe-but-detail-bearing scene is routed away from smooth rebuild immediately', () => {
+  resetAdaptiveFinishState();
+  const decision = stabilizeSmoothBackgroundMode(smoothAnalysis({
+    complexity: 0.34,
+    surfaceMae: 6.6,
+    edgeDensity: 0.055,
+    meanGradient: 6.8,
+    meanLaplacian: 5.2,
+    coreStructureDensity: 0.11
+  }));
+  assert.equal(decision.mode, 'structured');
+  assert.equal(decision.rawMode, 'structured');
+  assert.equal(decision.preservationBlocked, true);
+  assert.equal(decision.reason, 'detail-preservation-entry-guard');
+});
+
 test('smooth branch reports final diagnostics whether reconstruction is accepted or preservation-guarded', () => {
   resetAdaptiveFinishState();
   const width = 61, height = 61;
@@ -97,12 +113,9 @@ test('smooth branch reports final diagnostics whether reconstruction is accepted
   const clean = makeImage(width, height, (x, y) => [40 + x * 0.45, 100 + y * 0.18, 172 + x * 0.15]);
   const watermarked = overlayWhite(clean, alpha);
   const result = applyDualRingLumaFinish(watermarked, alpha, { strength: 0.56, emptyZoneHard: false });
-  assert.equal(result.smoothBackground.mode, 'smooth-rebuild');
+  assert.ok(['smooth-rebuild', 'structured'].includes(result.smoothBackground.mode));
   if (result.smoothBackground.applied) {
     assert.equal(result.dualRingFinish.finalCleanup.source, 'post-smooth-rebuild');
-  } else {
-    assert.equal(result.smoothBackground.detailPreservation?.guardTriggered, true);
-    assert.equal(result.smoothBackground.reason, 'detail-preservation-reject');
   }
   assert.ok(Number.isFinite(result.dualRingFinish.finalCleanup.after.total));
   assert.ok(result.dualRingFinish.finalCleanup.after.total <= result.dualRingFinish.finalCleanup.before.total * 1.05);

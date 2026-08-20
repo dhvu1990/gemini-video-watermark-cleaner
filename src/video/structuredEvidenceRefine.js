@@ -184,6 +184,21 @@ export function buildStructuredEvidenceCandidate(image, alphaMap, options = {}) 
   });
   let selected = shape.correctedPixels > 0 ? shape.image : image;
 
+  const persistenceEnabled = options.refinementPersistence !== false;
+  const persistence = persistenceEnabled && shape.correctedPixels > 0
+    ? applyCoherentStructuredShapePass(selected, alphaMap, {
+        enabled: true,
+        strength: options.refinementPersistenceStrength ?? 0.16,
+        minAlignment: options.refinementPersistenceMinAlignment ?? 0.60,
+        maxLumaDelta: options.refinementPersistenceMaxLumaDelta ?? 5.5,
+        minResidual: options.refinementPersistenceMinResidual ?? 0.78,
+        fullResidual: options.refinementPersistenceFullResidual ?? 4.8,
+        minNeighborResidual: options.refinementPersistenceMinNeighborResidual ?? 0.58,
+        tangentDistance: options.refinementPersistenceTangentDistance ?? 1.5
+      })
+    : { image: selected, correctedPixels: 0, coherentCandidates: 0, guardedPixels: 0, meanBlend: 0, meanAbsLumaDelta: 0 };
+  if (persistence.correctedPixels > 0) selected = persistence.image;
+
   const toneMicroEnabled = options.refinementToneMicro !== false;
   const toneResult = toneMicroEnabled
     ? applyLocalToneMatch(selected, alphaMap, {
@@ -192,6 +207,7 @@ export function buildStructuredEvidenceCandidate(image, alphaMap, options = {}) 
         maxLumaShift: options.refinementToneMaxShift ?? 5.5,
         maxLocalShift: options.refinementToneMaxLocalShift ?? 4.5,
         localMix: options.refinementToneLocalMix ?? 0.34,
+        sectorMix: options.refinementToneSectorMix ?? 0.56,
         minScore: options.refinementToneMinScore ?? 0.72,
         minImprovement: options.refinementToneMinImprovement ?? 0.025,
         minSamples: options.refinementToneMinSamples ?? 12,
@@ -203,11 +219,27 @@ export function buildStructuredEvidenceCandidate(image, alphaMap, options = {}) 
   const toneMicro = toneResult.localToneMatch || { enabled: toneMicroEnabled, attempted: false, accepted: false };
   if (toneMicro.accepted) selected = { width: toneResult.width, height: toneResult.height, data: toneResult.data };
 
+  const shapePixels = shape.correctedPixels + persistence.correctedPixels;
+  const baseMode = shapePixels > 0
+    ? (persistence.correctedPixels > 0 ? 'shape-coherent+persistence' : 'shape-coherent')
+    : 'none';
   return {
     image: selected,
     shape,
+    persistence: {
+      enabled: persistenceEnabled,
+      attempted: persistenceEnabled && shape.correctedPixels > 0,
+      accepted: persistence.correctedPixels > 0,
+      correctedPixels: persistence.correctedPixels,
+      coherentCandidates: persistence.coherentCandidates,
+      guardedPixels: persistence.guardedPixels,
+      meanBlend: persistence.meanBlend,
+      meanAbsLumaDelta: persistence.meanAbsLumaDelta
+    },
     toneMicro,
-    candidatePixels: shape.correctedPixels + (toneMicro.accepted ? (toneMicro.correctedPixels || 0) : 0),
-    mode: shape.correctedPixels > 0 ? (toneMicro.accepted ? 'shape-coherent+tone-micro' : 'shape-coherent') : (toneMicro.accepted ? 'tone-micro' : 'none')
+    candidatePixels: shapePixels + (toneMicro.accepted ? (toneMicro.correctedPixels || 0) : 0),
+    mode: baseMode !== 'none'
+      ? (toneMicro.accepted ? `${baseMode}+tone-micro` : baseMode)
+      : (toneMicro.accepted ? 'tone-micro' : 'none')
   };
 }

@@ -49,6 +49,30 @@ test('local tone match reduces a uniform luma offset on a smooth gradient', () =
   assert.ok(result.localToneMatch.correctedPixels > 0);
 });
 
+test('quadrant-aware tone field detects opposite footprint offsets without forcing one global shift', () => {
+  const width = 64, height = 64;
+  const alpha = diamondAlpha(width, height);
+  const base = image(width, height, (x, y) => [104 + x * 0.22, 126 + y * 0.18, 146 + x * 0.12]);
+  const damaged = { width, height, data: new Uint8ClampedArray(base.data) };
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const p = y * width + x;
+      if (alpha[p] < 0.07 || alpha[p] > 0.68) continue;
+      const shift = y < height / 2 ? 7 : -5;
+      const i = p * 4;
+      damaged.data[i] += shift; damaged.data[i + 1] += shift; damaged.data[i + 2] += shift;
+    }
+  }
+  const before = measureLocalToneMismatch(damaged, alpha);
+  const result = applyLocalToneMatch(damaged, alpha, { strength: 0.78, sectorMix: 0.78, minScore: 0.6 });
+  assert.ok(before.sectorSpread > 5, JSON.stringify(before));
+  assert.equal(result.localToneMatch.attempted, true);
+  if (result.localToneMatch.accepted) {
+    assert.ok(result.localToneMatch.meanSectorAdaptation > 0);
+    assert.ok(result.localToneMatch.candidateImprovement > 0);
+  }
+});
+
 test('local tone match backs off on a high-detail checkerboard scene', () => {
   const width = 64, height = 64;
   const alpha = diamondAlpha(width, height);
