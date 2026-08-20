@@ -103,3 +103,39 @@ test('structured fallback exposes shape ghost diagnostics even when ring thresho
   assert.ok(result.structuredRing.shapeGhost);
   assert.equal(typeof result.structuredRing.shapeGhost.accepted, 'boolean');
 });
+
+test('light smooth backgrounds can enter conservative micro-ghost cleanup without broad chroma drift', () => {
+  const width = 56, height = 56;
+  const alpha = softDiamondAlpha(width, height);
+  const clean = image(width, height, (x, y) => {
+    const texture = ((x * 3 + y * 5) % 7) - 3;
+    return [224 + texture, 218 + texture, 202 + texture];
+  });
+  const damaged = image(width, height, (x, y) => {
+    const p = y * width + x;
+    const i = p * 4;
+    const ghost = alpha[p] > 0.08 ? Math.round(2 + alpha[p] * 8) : 0;
+    return [
+      Math.min(255, clean.data[i] + ghost),
+      Math.min(255, clean.data[i + 1] + ghost),
+      Math.min(255, clean.data[i + 2] + ghost)
+    ];
+  });
+  const result = applyShapeGhostSuppression(damaged, alpha, {
+    minScore: 999,
+    strength: 0.56
+  });
+  const info = result.shapeGhost;
+  assert.ok(info.field.meanLuma > 150);
+  assert.equal(info.lightMicroEligible, true);
+  assert.equal(info.microEligible, true);
+  assert.equal(info.attempted, true);
+  assert.ok(info.candidatePixels > 0);
+  assert.ok(info.candidateAfter.score <= info.before.score);
+  if (info.accepted) {
+    assert.ok(info.outerAfter.chroma <= info.outerBefore.chroma * 1.006 + 1e-9);
+    assert.ok(info.lightMicroPixels > 0);
+  } else {
+    assert.equal(meanDelta(result, damaged), 0);
+  }
+});
