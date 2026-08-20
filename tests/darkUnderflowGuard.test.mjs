@@ -76,15 +76,17 @@ test('dark underflow guard lifts gain-induced black collapse back toward a dark 
   assert.ok(meanLuma(guarded, alpha) > meanLuma(collapsed, alpha) + 6);
 });
 
-test('inverseAlphaRestore automatically applies the underflow guard for an over-gained dark scene', () => {
+test('inverseAlphaRestore prevents dark collapse before the secondary underflow guard is needed', () => {
   const width = 64, height = 64;
   const alpha = diamondAlpha(width, height, 0.48);
   const base = makeImage(width, height, () => [30, 31, 33]);
   const composite = compositeWhite(base, alpha);
   const result = inverseAlphaRestore(composite, alpha, 1.35);
 
-  assert.equal(result.darkUnderflowGuard?.attempted, true, JSON.stringify(result.darkUnderflowGuard));
-  assert.equal(result.darkUnderflowGuard?.accepted, true, JSON.stringify(result.darkUnderflowGuard));
+  assert.equal(result.adaptiveAlphaUnderflowCap?.attempted, true, JSON.stringify(result.adaptiveAlphaUnderflowCap));
+  assert.ok((result.adaptiveAlphaUnderflowCap?.alphaCappedPixels || 0) > 0, JSON.stringify(result.adaptiveAlphaUnderflowCap));
+  assert.ok((result.adaptiveAlphaUnderflowCap?.blackPixelsPrevented || 0) > 0, JSON.stringify(result.adaptiveAlphaUnderflowCap));
+  assert.ok(result.darkUnderflowGuard, 'secondary dark-underflow diagnostics should remain available');
   assert.ok(meanLuma(result, alpha) > 10);
 });
 
