@@ -5,6 +5,7 @@ import { applyShapeGhostSuppression } from './shapeGhostSuppress.js';
 import { applyCenterSeamSuppression } from './centerSeamSuppress.js';
 import { applyLocalToneMatch } from './localToneMatch.js';
 import { applyOuterHaloSuppression } from './outerHaloSuppress.js';
+import { buildStructuredEvidenceCandidate } from './structuredEvidenceRefine.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -190,7 +191,7 @@ function applyEvidenceGatedRefinement(image, alphaMap, options = {}) {
   const enabled = options.evidenceRefinement !== false;
   const minScore = Number.isFinite(options.refinementMinScore) ? options.refinementMinScore : 1.75;
   const minDensity = Number.isFinite(options.refinementMinDensity) ? options.refinementMinDensity : 0.012;
-  const strength = clamp(Number(options.refinementStrength ?? 0.18), 0.08, 0.30);
+  const strength = clamp(Number(options.refinementStrength ?? 0.22), 0.08, 0.30);
   const beforeAligned = measureStructuredRingResidual(image, alphaMap);
   const density = alphaMap.length ? beforeAligned.samples / alphaMap.length : 0;
   const attempted = enabled && beforeAligned.score >= minScore && density >= minDensity;
@@ -207,19 +208,25 @@ function applyEvidenceGatedRefinement(image, alphaMap, options = {}) {
     beforeGlobal: null,
     candidateGlobalAfter: null,
     correctedPixels: 0,
+    candidatePixels: 0,
+    candidateMode: 'none',
+    coherentCandidates: 0,
+    guardedPixels: 0,
     meanBlend: 0,
-    meanAbsLumaDelta: 0
+    meanAbsLumaDelta: 0,
+    shapeCoherent: null,
+    toneMicro: { enabled: options.refinementToneMicro !== false, attempted: false, accepted: false }
   };
   if (!attempted) return { image, state };
 
   const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
-  const pass = applyStructuredRingPass(image, alphaMap, strength);
-  const candidateAlignedAfter = measureStructuredRingResidual(pass.image, alphaMap);
-  const candidateGlobalAfter = measurePostCleanupResidual(pass.image, alphaMap);
+  const candidate = buildStructuredEvidenceCandidate(image, alphaMap, { ...options, refinementStrength: strength });
+  const candidateAlignedAfter = measureStructuredRingResidual(candidate.image, alphaMap);
+  const candidateGlobalAfter = measurePostCleanupResidual(candidate.image, alphaMap);
   const alignedImprovement = beforeAligned.score > 1e-6
     ? (beforeAligned.score - candidateAlignedAfter.score) / beforeAligned.score
     : 0;
-  const accepted = pass.correctedPixels > 0
+  const accepted = candidate.candidatePixels > 0
     && alignedImprovement >= 0.015
     && candidateAlignedAfter.score <= beforeAligned.score * 0.985
     && candidateGlobalAfter.total <= beforeGlobal.total * 1.002
@@ -230,13 +237,19 @@ function applyEvidenceGatedRefinement(image, alphaMap, options = {}) {
     beforeGlobal,
     candidateGlobalAfter,
     candidateAlignedAfter,
+    candidateAlignedImprovement: alignedImprovement,
     alignedImprovement: accepted ? alignedImprovement : 0,
-    correctedPixels: accepted ? pass.correctedPixels : 0,
-    candidatePixels: pass.correctedPixels,
-    meanBlend: accepted ? pass.meanBlend : 0,
-    meanAbsLumaDelta: accepted ? pass.meanAbsLumaDelta : 0
+    correctedPixels: accepted ? candidate.candidatePixels : 0,
+    candidatePixels: candidate.candidatePixels,
+    candidateMode: candidate.mode,
+    coherentCandidates: candidate.shape?.coherentCandidates || 0,
+    guardedPixels: candidate.shape?.guardedPixels || 0,
+    meanBlend: accepted ? (candidate.shape?.meanBlend || 0) : 0,
+    meanAbsLumaDelta: accepted ? (candidate.shape?.meanAbsLumaDelta || 0) : 0,
+    shapeCoherent: candidate.shape || null,
+    toneMicro: candidate.toneMicro || state.toneMicro
   });
-  return { image: accepted ? pass.image : image, state };
+  return { image: accepted ? candidate.image : image, state };
 }
 
 function finishWithShapeGhost(image, alphaMap, options) {
