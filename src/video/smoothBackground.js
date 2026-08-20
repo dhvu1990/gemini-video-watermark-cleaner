@@ -311,16 +311,103 @@ function microSmoothTransition(image, mask, strength = 0.18) {
   return { width, height, data: out };
 }
 
-export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, options = {}) {
-  if (!analysis?.safe || !analysis.coefficients || alphaMap.length !== image.width * image.height) {
-    return {
-      width: image.width,
-      height: image.height,
-      data: new Uint8ClampedArray(image.data),
-      smoothBackground: { applied: false, ...(analysis || { safe: false, mode: 'structured' }) }
-    };
+export function measureProtectedSceneDetail(image, alphaMap, options = {}) {
+  const { width, height, data } = image;
+  if (!alphaMap || alphaMap.length !== width * height) {
+    return { samples: 0, weightSum: 0, meanGradient: 0, meanLaplacian: 0, edgeDensity: 0, strongEdges: 0 };
+  }
+  const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.035;
+  const fullAlpha = Number.isFinite(options.fullAlpha) ? options.fullAlpha : 0.14;
+  const maxAlpha = Number.isFinite(options.maxAlpha) ? options.maxAlpha : 0.88;
+  const edgeThreshold = Number.isFinite(options.edgeThreshold) ? options.edgeThreshold : 8.0;
+  let gradientSum = 0;
+  let laplacianSum = 0;
+  let edgeSum = 0;
+  let weightSum = 0;
+  let samples = 0;
+  let strongEdges = 0;
+
+  for (let y = 1; y < height - 1; y++) {
+    for (let x = 1; x < width - 1; x++) {
+      const p = y * width + x;
+      const alpha = alphaMap[p] || 0;
+      if (alpha < minAlpha || alpha > maxAlpha) continue;
+      const idx = p * 4;
+      const left = lumaAt(data, idx - 4);
+      const right = lumaAt(data, idx + 4);
+      const up = lumaAt(data, idx - width * 4);
+      const down = lumaAt(data, idx + width * 4);
+      const center = lumaAt(data, idx);
+      const gx = (right - left) * 0.5;
+      const gy = (down - up) * 0.5;
+      const gradient = Math.hypot(gx, gy);
+      const laplacian = Math.abs(left + right + up + down - center * 4);
+      const agx = (alphaMap[p + 1] || 0) - (alphaMap[p - 1] || 0);
+      const agy = (alphaMap[p + width] || 0) - (alphaMap[p - width] || 0);
+      const alphaGradient = Math.hypot(agx, agy);
+      let alignment = 0;
+      if (gradient > 1e-6 && alphaGradient > 1e-6) {
+        alignment = Math.abs((gx * agx + gy * agy) / (gradient * alphaGradient));
+      }
+      const shapeAligned = smoothstep(0.64, 0.94, alignment) * smoothstep(0.0015, 0.018, alphaGradient);
+      const footprint = smoothstep(minAlpha, fullAlpha, alpha) * (1 - smoothstep(0.72, maxAlpha, alpha));
+      const sceneWeight = footprint * (1 - shapeAligned * 0.92);
+      if (sceneWeight < 0.025) continue;
+      const cappedGradient = Math.min(gradient, 40);
+      const cappedLaplacian = Math.min(laplacian, 64);
+      gradientSum += cappedGradient * sceneWeight;
+      laplacianSum += cappedLaplacian * sceneWeight;
+      const edge = gradient >= edgeThreshold ? 1 : 0;
+      edgeSum += edge * sceneWeight;
+      if (edge && shapeAligned < 0.35) strongEdges++;
+      weightSum += sceneWeight;
+      samples++;
+    }
   }
 
+  return {
+    samples,
+    weightSum,
+    meanGradient: weightSum ? gradientSum / weightSum : 0,
+    meanLaplacian: weightSum ? laplacianSum / weightSum : 0,
+    edgeDensity: weightSum ? edgeSum / weightSum : 0,
+    strongEdges
+  };
+}
+
+export function evaluateSmoothDetailPreservation(beforeImage, afterImage, alphaMap, options = {}) {
+  const before = measureProtectedSceneDetail(beforeImage, alphaMap, options);
+  const after = measureProtectedSceneDetail(afterImage, alphaMap, options);
+  const minWeight = Number.isFinite(options.minWeight) ? options.minWeight : 7.5;
+  const eligible = before.weightSum >= minWeight
+    && (before.meanGradient >= (options.minGradientEvidence ?? 2.4)
+      || before.meanLaplacian >= (options.minLaplacianEvidence ?? 3.4)
+      || before.edgeDensity >= (options.minEdgeEvidence ?? 0.035));
+  const ratio = (value, baseline, epsilon) => baseline > epsilon ? value / baseline : 1;
+  const gradientRetention = ratio(after.meanGradient, before.meanGradient, 0.8);
+  const laplacianRetention = ratio(after.meanLaplacian, before.meanLaplacian, 1.0);
+  const edgeRetention = ratio(after.edgeDensity, before.edgeDensity, 0.012);
+  const minGradientRetention = Number.isFinite(options.minGradientRetention) ? options.minGradientRetention : 0.62;
+  const minLaplacianRetention = Number.isFinite(options.minLaplacianRetention) ? options.minLaplacianRetention : 0.58;
+  const minEdgeRetention = Number.isFinite(options.minEdgeRetention) ? options.minEdgeRetention : 0.55;
+  const failures = [];
+  if (eligible && gradientRetention < minGradientRetention) failures.push('gradient-retention');
+  if (eligible && laplacianRetention < minLaplacianRetention) failures.push('laplacian-retention');
+  if (eligible && before.edgeDensity >= 0.025 && edgeRetention < minEdgeRetention) failures.push('edge-retention');
+  return {
+    eligible,
+    accepted: failures.length === 0,
+    failures,
+    before,
+    after,
+    gradientRetention,
+    laplacianRetention,
+    edgeRetention,
+    thresholds: { minGradientRetention, minLaplacianRetention, minEdgeRetention, minWeight }
+  };
+}
+
+function renderSmoothCandidate(image, alphaMap, analysis, options = {}) {
   const strength = clamp(Number(options.strength ?? 0.995), 0, 1);
   const featherMask = buildFeatherMask(alphaMap, image.width, image.height, options.dilationRadius ?? 4);
   const out = new Uint8ClampedArray(image.data);
@@ -375,11 +462,10 @@ export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, o
   );
 
   return {
-    width: smoothed.width,
-    height: smoothed.height,
-    data: smoothed.data,
-    smoothBackground: {
+    image: { width: smoothed.width, height: smoothed.height, data: smoothed.data },
+    diagnostics: {
       applied: true,
+      accepted: true,
       safe: true,
       mode: 'smooth-rebuild',
       reason: analysis.reason,
@@ -398,7 +484,123 @@ export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, o
       meanChromaCorrection: neutralGuardPixels ? chromaCorrectionSum / neutralGuardPixels : 0,
       replacedPixels,
       meanBlend: replacedPixels ? blendSum / replacedPixels : 0,
-      maxBlend
+      maxBlend,
+      appliedStrength: strength,
+      dilationRadius: options.dilationRadius ?? 4,
+      microSmooth: clamp(Number(options.microSmooth ?? 0.18), 0, 0.35)
+    }
+  };
+}
+
+export function applySmoothBackgroundReconstruction(image, alphaMap, analysis, options = {}) {
+  if (!analysis?.safe || !analysis.coefficients || alphaMap.length !== image.width * image.height) {
+    return {
+      width: image.width,
+      height: image.height,
+      data: new Uint8ClampedArray(image.data),
+      smoothBackground: { applied: false, accepted: false, ...(analysis || { safe: false, mode: 'structured' }) }
+    };
+  }
+
+  const requestedStrength = clamp(Number(options.strength ?? 0.995), 0, 1);
+  const full = renderSmoothCandidate(image, alphaMap, analysis, { ...options, strength: requestedStrength });
+  const detailOptions = options.detailPreservationOptions || {};
+  const fullDetail = evaluateSmoothDetailPreservation(image, full.image, alphaMap, detailOptions);
+  if (fullDetail.accepted) {
+    return {
+      width: full.image.width,
+      height: full.image.height,
+      data: full.image.data,
+      smoothBackground: {
+        ...full.diagnostics,
+        detailPreservation: {
+          ...fullDetail,
+          guardTriggered: false,
+          fallbackAttempted: false,
+          fallbackAccepted: false,
+          requestedStrength,
+          appliedStrength: full.diagnostics.appliedStrength
+        }
+      }
+    };
+  }
+
+  const fallbackStrength = Math.min(requestedStrength, clamp(Number(options.preservationFallbackStrength ?? 0.42), 0.18, 0.60));
+  const fallbackDilation = Math.min(Number(options.dilationRadius ?? 4), Math.max(1, Number(options.preservationFallbackDilation ?? 2)));
+  const fallbackMicroSmooth = Math.min(Number(options.microSmooth ?? 0.18), clamp(Number(options.preservationFallbackMicroSmooth ?? 0.08), 0, 0.14));
+  if (fallbackStrength < requestedStrength - 0.04) {
+    const fallback = renderSmoothCandidate(image, alphaMap, analysis, {
+      ...options,
+      strength: fallbackStrength,
+      dilationRadius: fallbackDilation,
+      microSmooth: fallbackMicroSmooth
+    });
+    const fallbackDetail = evaluateSmoothDetailPreservation(image, fallback.image, alphaMap, detailOptions);
+    if (fallbackDetail.accepted) {
+      return {
+        width: fallback.image.width,
+        height: fallback.image.height,
+        data: fallback.image.data,
+        smoothBackground: {
+          ...fallback.diagnostics,
+          reason: `${analysis.reason}+detail-preservation-fallback`,
+          detailPreservation: {
+            ...fallbackDetail,
+            fullCandidate: fullDetail,
+            guardTriggered: true,
+            fallbackAttempted: true,
+            fallbackAccepted: true,
+            requestedStrength,
+            appliedStrength: fallback.diagnostics.appliedStrength
+          }
+        }
+      };
+    }
+    return {
+      width: image.width,
+      height: image.height,
+      data: new Uint8ClampedArray(image.data),
+      smoothBackground: {
+        ...full.diagnostics,
+        applied: false,
+        accepted: false,
+        reason: 'detail-preservation-reject',
+        replacedPixels: 0,
+        meanBlend: 0,
+        maxBlend: 0,
+        detailPreservation: {
+          ...fallbackDetail,
+          fullCandidate: fullDetail,
+          guardTriggered: true,
+          fallbackAttempted: true,
+          fallbackAccepted: false,
+          requestedStrength,
+          appliedStrength: 0
+        }
+      }
+    };
+  }
+
+  return {
+    width: image.width,
+    height: image.height,
+    data: new Uint8ClampedArray(image.data),
+    smoothBackground: {
+      ...full.diagnostics,
+      applied: false,
+      accepted: false,
+      reason: 'detail-preservation-reject',
+      replacedPixels: 0,
+      meanBlend: 0,
+      maxBlend: 0,
+      detailPreservation: {
+        ...fullDetail,
+        guardTriggered: true,
+        fallbackAttempted: false,
+        fallbackAccepted: false,
+        requestedStrength,
+        appliedStrength: 0
+      }
     }
   };
 }
