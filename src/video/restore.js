@@ -1,5 +1,6 @@
 import { enhanceAlphaEdges } from './alpha.js';
 import { applyDarkUnderflowGuard } from './darkUnderflowGuard.js';
+import { buildAdaptiveAlphaUnderflowCap } from './adaptiveAlphaUnderflowCap.js';
 
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -11,12 +12,11 @@ function smoothstep(edge0, edge1, value) {
 }
 
 export function inverseAlphaRestore(roi, alphaMap, gain = 1) {
+  const cap = buildAdaptiveAlphaUnderflowCap(roi, alphaMap, gain, { enabled: true });
   const out = new Uint8ClampedArray(roi.data);
   const pixels = roi.width * roi.height;
   for (let p = 0; p < pixels; p++) {
-    const rawAlpha = alphaMap[p] || 0;
-    if (rawAlpha <= 0.002) continue;
-    const alpha = clamp(rawAlpha * gain, 0, 0.99);
+    const alpha = cap.effectiveAlpha[p] || 0;
     if (alpha <= 0.002) continue;
     const idx = p * 4;
     const inv = 1 - alpha;
@@ -30,6 +30,7 @@ export function inverseAlphaRestore(roi, alphaMap, gain = 1) {
     width: guarded.width,
     height: guarded.height,
     data: guarded.data,
+    adaptiveAlphaUnderflowCap: cap.diagnostics || null,
     darkUnderflowGuard: guarded.darkUnderflowGuard || null
   };
 }
