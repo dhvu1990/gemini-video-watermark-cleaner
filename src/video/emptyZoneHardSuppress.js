@@ -29,6 +29,11 @@ export function classifyNearEmptyBackground(analysis, options = {}) {
   };
 }
 
+function preservationGuardTriggered(result) {
+  const detail = result?.smoothBackground?.detailPreservation;
+  return Boolean(detail?.guardTriggered || detail?.fallbackAttempted || result?.smoothBackground?.accepted === false);
+}
+
 export function applySafeEmptyZoneHardSuppression(image, alphaMap, analysis, options = {}) {
   const classification = classifyNearEmptyBackground(analysis, options);
   const before = measurePostCleanupResidual(image, alphaMap);
@@ -57,12 +62,52 @@ export function applySafeEmptyZoneHardSuppression(image, alphaMap, analysis, opt
     dilationRadius: options.dilationRadius ?? 6,
     microSmooth: options.microSmooth ?? 0.28
   });
+  if (preservationGuardTriggered(first)) {
+    return {
+      width: image.width,
+      height: image.height,
+      data: new Uint8ClampedArray(image.data),
+      emptyZoneHard: {
+        enabled: true,
+        eligible: true,
+        attempted: true,
+        accepted: false,
+        reason: 'detail-preservation-guard',
+        before,
+        after: before,
+        candidateAfter: before,
+        improvement: 0,
+        limits: classification.limits,
+        detailPreservation: first.smoothBackground?.detailPreservation || null
+      }
+    };
+  }
   const firstImage = { width: first.width, height: first.height, data: first.data };
   const second = applySmoothBackgroundReconstruction(firstImage, alphaMap, { ...analysis, safe: true }, {
     strength: 1,
     dilationRadius: options.secondDilationRadius ?? 7,
     microSmooth: options.secondMicroSmooth ?? 0.30
   });
+  if (preservationGuardTriggered(second)) {
+    return {
+      width: image.width,
+      height: image.height,
+      data: new Uint8ClampedArray(image.data),
+      emptyZoneHard: {
+        enabled: true,
+        eligible: true,
+        attempted: true,
+        accepted: false,
+        reason: 'detail-preservation-guard',
+        before,
+        after: before,
+        candidateAfter: before,
+        improvement: 0,
+        limits: classification.limits,
+        detailPreservation: second.smoothBackground?.detailPreservation || null
+      }
+    };
+  }
   const candidate = { width: second.width, height: second.height, data: second.data };
   const candidateAfter = measurePostCleanupResidual(candidate, alphaMap);
   const improvement = before.total > 1e-6 ? (before.total - candidateAfter.total) / before.total : 0;
