@@ -38,21 +38,37 @@ export function evaluateFaintAnchorSafety({
   const dy = Number(refinement?.dy) || 0;
   const distance = Math.hypot(dx, dy);
   const signature = signatureSupport(scores);
+  const ultraFaint = score < 0.045;
 
-  if (score >= threshold) return { safe: false, reason: 'not-low-confidence', id, distance, signature };
-  if (score < 0.045) return { safe: false, reason: 'faint-anchor-too-weak', id, distance, signature };
-  if (!knownExactAnchor(id)) return { safe: false, reason: 'faint-anchor-not-exact-profile', id, distance, signature };
+  if (score >= threshold) return { safe: false, reason: 'not-low-confidence', id, distance, signature, ultraFaint };
+  // v1.0.96: allow a correctly anchored ~4% signature to reach calibration,
+  // but never promote it directly. Ultra-faint candidates face stronger temporal
+  // signature requirements and a stricter cleanup-improvement gate below.
+  if (score < 0.032) return { safe: false, reason: 'faint-anchor-too-weak', id, distance, signature, ultraFaint };
+  if (!knownExactAnchor(id)) return { safe: false, reason: 'faint-anchor-not-exact-profile', id, distance, signature, ultraFaint };
   if (distance > 3.25 || Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-    return { safe: false, reason: 'faint-anchor-drift', id, distance, signature };
+    return { safe: false, reason: 'faint-anchor-drift', id, distance, signature, ultraFaint };
   }
-  if (peak < Math.max(0.055, score * 0.92)) {
-    return { safe: false, reason: 'faint-anchor-weak-peak', id, distance, signature };
+  const minimumPeak = ultraFaint ? Math.max(0.042, score * 1.02) : Math.max(0.055, score * 0.92);
+  if (peak < minimumPeak) {
+    return { safe: false, reason: 'faint-anchor-weak-peak', id, distance, signature, ultraFaint, minimumPeak };
   }
-  if (signature.supportRatio < 0.50 || signature.gradientRatio < 0.50 || signature.spatialRatio < 0.34) {
-    return { safe: false, reason: 'faint-anchor-inconsistent-signature', id, distance, signature };
+  const minimumSupport = ultraFaint ? 0.67 : 0.50;
+  const minimumGradient = ultraFaint ? 0.67 : 0.50;
+  const minimumSpatial = ultraFaint ? 0.50 : 0.34;
+  if (signature.supportRatio < minimumSupport || signature.gradientRatio < minimumGradient || signature.spatialRatio < minimumSpatial) {
+    return {
+      safe: false,
+      reason: 'faint-anchor-inconsistent-signature',
+      id,
+      distance,
+      signature,
+      ultraFaint,
+      requiredSignature: { supportRatio: minimumSupport, gradientRatio: minimumGradient, spatialRatio: minimumSpatial }
+    };
   }
 
-  return { safe: true, reason: 'faint-anchor-signature-match', id, distance, signature };
+  return { safe: true, reason: ultraFaint ? 'ultra-faint-anchor-signature-match' : 'faint-anchor-signature-match', id, distance, signature, ultraFaint };
 }
 
 export function evaluateFaintAnchorCalibration({ safety, calibration } = {}) {
@@ -62,20 +78,39 @@ export function evaluateFaintAnchorCalibration({ safety, calibration } = {}) {
   const residual = Number(calibration.residualScore);
   const finiteScores = Number.isFinite(baseline) && Number.isFinite(residual) && baseline > 0;
   if (!finiteScores) return { safe: false, reason: 'faint-anchor-invalid-calibration' };
-  if (!Number.isFinite(improvement) || improvement < 0.018) {
-    return { safe: false, reason: 'faint-anchor-no-cleanup-improvement', improvement, baseline, residual };
+  const minimumImprovement = safety.ultraFaint ? 0.028 : 0.018;
+  const maximumResidualRatio = safety.ultraFaint ? 0.968 : 0.982;
+  if (!Number.isFinite(improvement) || improvement < minimumImprovement) {
+    return {
+      safe: false,
+      reason: 'faint-anchor-no-cleanup-improvement',
+      improvement,
+      baseline,
+      residual,
+      minimumImprovement,
+      ultraFaint: Boolean(safety.ultraFaint)
+    };
   }
-  if (residual >= baseline * 0.982) {
-    return { safe: false, reason: 'faint-anchor-residual-not-improved', improvement, baseline, residual };
+  if (residual >= baseline * maximumResidualRatio) {
+    return {
+      safe: false,
+      reason: 'faint-anchor-residual-not-improved',
+      improvement,
+      baseline,
+      residual,
+      maximumResidualRatio,
+      ultraFaint: Boolean(safety.ultraFaint)
+    };
   }
   return {
     safe: true,
-    reason: 'faint-anchor-calibrated-match',
+    reason: safety.ultraFaint ? 'ultra-faint-anchor-calibrated-match' : 'faint-anchor-calibrated-match',
     improvement,
     baseline,
     residual,
     signature: safety.signature,
     id: safety.id,
-    distance: safety.distance
+    distance: safety.distance,
+    ultraFaint: Boolean(safety.ultraFaint)
   };
 }
