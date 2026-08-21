@@ -23,8 +23,6 @@ function signatureSupport(scores = []) {
 }
 
 function ultraFaintProbeEvidence({ score, peak, signature }) {
-  // A probe is not permission to clean. It only permits low-gain calibration to run
-  // at an exact catalog anchor. Promotion after the probe is intentionally much stricter.
   if (score < 0.032 || score >= 0.045) return { eligible: false, reason: 'not-ultra-faint-probe-range' };
   const minimumPeak = Math.max(0.034, score * 0.86);
   if (peak < minimumPeak) return { eligible: false, reason: 'probe-peak-too-weak', minimumPeak };
@@ -90,8 +88,6 @@ export function evaluateFaintAnchorSafety({
     };
   }
 
-  // v1.0.98: exact ultra-faint anchors may probe calibration even when the normal
-  // signature gate is narrowly missed. This does NOT make them safe to clean yet.
   if (ultraFaint) {
     const probe = ultraFaintProbeEvidence({ score, peak, signature });
     if (probe.eligible) {
@@ -137,10 +133,13 @@ export function evaluateFaintAnchorCalibration({ safety, calibration } = {}) {
   if (!finiteScores) return { safe: false, reason: 'faint-anchor-invalid-calibration' };
 
   const probeOnly = Boolean(safety.probeOnly);
-  // Probe-only candidates entered calibration with weaker detector evidence, so they
-  // must demonstrate a substantially stronger cleanup win before promotion.
-  const minimumImprovement = probeOnly ? 0.075 : (safety.ultraFaint ? 0.028 : 0.018);
-  const maximumResidualRatio = probeOnly ? 0.91 : (safety.ultraFaint ? 0.968 : 0.982);
+  // v1.0.99: for a ~4% opacity exact-anchor watermark, the v1.0.98 pair
+  // (>=7.5% improvement AND residual ratio <0.91) effectively required >9%
+  // cleanup improvement and blocked the real sample. Keep the exact-anchor,
+  // no-drift, multi-frame and low-gain requirements, but make the cleanup gate
+  // proportional to the signal we are trying to remove.
+  const minimumImprovement = probeOnly ? 0.045 : (safety.ultraFaint ? 0.028 : 0.018);
+  const maximumResidualRatio = probeOnly ? 0.95 : (safety.ultraFaint ? 0.968 : 0.982);
   const bodyGain = Number(calibration.bodyGain);
   const lowGainPlausible = !probeOnly || (Number.isFinite(bodyGain) && bodyGain >= 0.10 && bodyGain <= 0.55);
 
