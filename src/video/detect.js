@@ -2,6 +2,7 @@ import { resolveVideoWatermarkCandidates } from './catalog.js';
 import { getVideoAlphaMap, setActiveAlphaCalibration } from './alpha.js';
 import { calibrateAlphaShape } from './calibration.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
+import { evaluateFaintAnchorCalibration, evaluateFaintAnchorSafety } from './faintAnchorSafety.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function luma(data, idx) { return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]; }
@@ -391,8 +392,19 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
       }))
     : evaluateDetectionSafety({ confidence: best.confidence, minConfidence, refinement });
 
+  const faintAnchorSafety = detectionSource === 'catalog-anchor' && !preCalibrationSafety.safe
+    ? evaluateFaintAnchorSafety({
+        confidence: best.confidence,
+        maxConfidence: best.maxConfidence,
+        minConfidence,
+        candidateId: best.candidate.id,
+        refinement,
+        scores: best.scores
+      })
+    : null;
+
   let calibration = null;
-  if (preCalibrationSafety.safe) {
+  if (preCalibrationSafety.safe || faintAnchorSafety?.safe) {
     const sourceFrames = frames.length <= 3 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
     const rois = sourceFrames.map((frame) => cropRoi(frame.imageData, best.candidate));
     calibration = await calibrateAlphaShape({ rois, size: best.candidate.size, bodyGain: estimatedAlphaGain, edgePolish });
@@ -402,21 +414,37 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     }
   }
 
-  const safety = preCalibrationSafety;
+  let safety = preCalibrationSafety;
+  if (!safety.safe && faintAnchorSafety?.safe) {
+    const calibratedSafety = evaluateFaintAnchorCalibration({ safety: faintAnchorSafety, calibration });
+    if (calibratedSafety.safe) safety = calibratedSafety;
+  }
+
   const detected = safety.safe;
   const alphaGain = Number.isFinite(calibration?.bodyGain) ? calibration.bodyGain : estimatedAlphaGain;
+  const rawConfidence = best.confidence;
+  const confidence = detected && safety.reason === 'faint-anchor-calibrated-match'
+    ? Math.max(rawConfidence, Number.isFinite(minConfidence) ? minConfidence : 0.12)
+    : rawConfidence;
+
   return {
     detected,
     safeToClean: detected,
-    reason: detected ? (detectionSource === 'regional-search' ? 'regional-signature-match' : 'multi-frame-match') : safety.reason,
+    reason: detected
+      ? (safety.reason === 'faint-anchor-calibrated-match'
+          ? safety.reason
+          : (detectionSource === 'regional-search' ? 'regional-signature-match' : 'multi-frame-match'))
+      : safety.reason,
     detectionSource,
     candidateId: best.candidate.id,
-    confidence: best.confidence,
+    confidence,
+    rawConfidence,
     voteRatio: best.voteRatio,
     maxConfidence: best.maxConfidence,
     position: { x: best.candidate.x, y: best.candidate.y, width: best.candidate.size, height: best.candidate.size },
     refinement: safety.refinement || refinement,
     regionalSafety: detectionSource === 'regional-search' ? safety : regionalSafety,
+    faintAnchorSafety: faintAnchorSafety ? { ...faintAnchorSafety, calibrated: safety.reason === 'faint-anchor-calibrated-match' } : null,
     safety,
     alphaGain,
     estimatedAlphaGain,
