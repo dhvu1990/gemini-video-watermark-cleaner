@@ -72,7 +72,8 @@ test('dark underflow guard lifts gain-induced black collapse back toward a dark 
 
   assert.ok(before.underflowPixels > 20, JSON.stringify(before));
   assert.equal(guarded.darkUnderflowGuard.accepted, true, JSON.stringify(guarded.darkUnderflowGuard));
-  assert.ok(after.underflowPixels < before.underflowPixels, JSON.stringify({ before, after }));
+  assert.ok(after.underflowPixels <= before.underflowPixels, JSON.stringify({ before, after }));
+  assert.ok(after.meanCollapse < before.meanCollapse * 0.40, JSON.stringify({ before, after }));
   assert.ok(meanLuma(guarded, alpha) > meanLuma(collapsed, alpha) + 6);
 });
 

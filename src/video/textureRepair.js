@@ -1,3 +1,5 @@
+import { measureCrossingSceneEdgeRisk, sceneEdgeProtectionAt } from './sceneEdgeProtection.js';
+
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
 function luma(data, index) { return 0.2126 * data[index] + 0.7152 * data[index + 1] + 0.0722 * data[index + 2]; }
@@ -181,6 +183,16 @@ export function applyPaddedTextureRepair(image, alphaMap, strength = 0.72) {
   const out = new Uint8ClampedArray(image.data);
   const directions = [[1, 0], [0, 1], [1, 1], [1, -1]];
   const hybridMask = buildHybridRepairMask(alphaMap, image.width, image.height);
+  const crossingRisk = measureCrossingSceneEdgeRisk(image, alphaMap, {
+    minAlpha: 0.012,
+    maxAlpha: 0.88,
+    minSamples: 24,
+    highScore: 0.28,
+    highDensity: 0.020,
+    mediumScore: 0.15,
+    mediumDensity: 0.010
+  });
+  const globalSceneFactor = crossingRisk.protect ? 0.12 : (crossingRisk.level === 'medium' ? 0.52 : 1);
 
   for (let y = 1; y < image.height - 1; y++) {
     for (let x = 1; x < image.width - 1; x++) {
@@ -193,19 +205,27 @@ export function applyPaddedTextureRepair(image, alphaMap, strength = 0.72) {
       const consensus = directionalConsensus(candidates);
       if (!consensus) continue;
 
+      const sceneEdge = sceneEdgeProtectionAt(image, alphaMap, x, y, { minAlpha: 0.012, maxAlpha: 0.88 });
+      if (sceneEdge.weight >= 0.60) continue;
       const edgeWeight = hybridMask.edge[p] || 0;
       const featherWeight = hybridMask.feather[p] || 0;
       const coreWeight = hybridMask.core[p] || 0;
       const regionWeight = clamp(edgeWeight * 0.94 + featherWeight * 0.45 + coreWeight * 0.035, 0, 1);
       const multiDirectionGuard = consensus.directions >= 2 ? 1 : (coreWeight > 0.20 ? 0.28 : 0.55);
       const spreadGuard = 1 - smoothstep(16, 72, consensus.spread) * 0.70;
-      const blend = Math.min(0.76, safeStrength * regionWeight * consensus.confidence * multiDirectionGuard * spreadGuard);
+      const sceneFactor = globalSceneFactor * (1 - sceneEdge.weight * 0.94);
+      const blend = Math.min(0.76, safeStrength * regionWeight * consensus.confidence * multiDirectionGuard * spreadGuard * sceneFactor);
       if (blend < 0.035) continue;
       const idx = p * 4;
       for (let c = 0; c < 3; c++) out[idx + c] = clampByte(image.data[idx + c] * (1 - blend) + consensus.rgb[c] * blend);
     }
   }
-  return { width: image.width, height: image.height, data: out };
+  return {
+    width: image.width,
+    height: image.height,
+    data: out,
+    paddedTextureRepair: { crossingRisk, globalSceneFactor }
+  };
 }
 
 function borderSad(current, previous, alphaMap, dx, dy) {

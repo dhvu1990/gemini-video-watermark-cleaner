@@ -70,8 +70,8 @@ export function measureDarkUnderflow(restored, original, alphaMap, options = {})
   }
   const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.22;
   const maxAlpha = Number.isFinite(options.maxAlpha) ? options.maxAlpha : 0.92;
-  const blackLuma = Number.isFinite(options.blackLuma) ? options.blackLuma : 12;
-  const collapseFloor = Number.isFinite(options.collapseFloor) ? options.collapseFloor : 8;
+  const blackLuma = Number.isFinite(options.blackLuma) ? options.blackLuma : 24;
+  const collapseFloor = Number.isFinite(options.collapseFloor) ? options.collapseFloor : 6;
   let footprint = 0, underflowPixels = 0, collapseSum = 0, spreadSum = 0;
   for (let y = 2; y < restored.height - 2; y++) {
     for (let x = 2; x < restored.width - 2; x++) {
@@ -86,7 +86,7 @@ export function measureDarkUnderflow(restored, original, alphaMap, options = {})
       const originalY = luma(rgbAt(original, x, y));
       const collapse = prediction.luma - restoredY;
       const compositeLift = originalY - restoredY;
-      if (restoredY > blackLuma || collapse < collapseFloor || compositeLift < (options.minCompositeLift ?? 10)) continue;
+      if (restoredY > blackLuma || collapse < collapseFloor || compositeLift < (options.minCompositeLift ?? 8)) continue;
       underflowPixels++;
       collapseSum += collapse;
       spreadSum += prediction.spread;
@@ -107,8 +107,8 @@ export function measureDarkUnderflow(restored, original, alphaMap, options = {})
 export function applyDarkUnderflowGuard(restored, original, alphaMap, options = {}) {
   const enabled = options.enabled !== false;
   const before = measureDarkUnderflow(restored, original, alphaMap, options);
-  const minDensity = Number.isFinite(options.minDensity) ? options.minDensity : 0.025;
-  const minPixels = Math.max(4, Number(options.minPixels ?? 8));
+  const minDensity = Number.isFinite(options.minDensity) ? options.minDensity : 0.018;
+  const minPixels = Math.max(4, Number(options.minPixels ?? 6));
   const attempted = enabled && before.underflowPixels >= minPixels && before.underflowDensity >= minDensity;
   if (!attempted) {
     return {
@@ -122,7 +122,7 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
   const out = new Uint8ClampedArray(restored.data);
   const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.22;
   const maxAlpha = Number.isFinite(options.maxAlpha) ? options.maxAlpha : 0.92;
-  const blackLuma = Number.isFinite(options.blackLuma) ? options.blackLuma : 12;
+  const blackLuma = Number.isFinite(options.blackLuma) ? options.blackLuma : 24;
   let correctedPixels = 0, guardedPixels = 0, blendSum = 0;
   for (let y = 2; y < restored.height - 2; y++) {
     for (let x = 2; x < restored.width - 2; x++) {
@@ -136,7 +136,7 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
       const currentY = luma(current);
       const originalY = luma(rgbAt(original, x, y));
       const collapse = prediction.luma - currentY;
-      if (currentY > blackLuma || collapse < (options.collapseFloor ?? 8) || originalY - currentY < (options.minCompositeLift ?? 10)) continue;
+      if (currentY > blackLuma || collapse < (options.collapseFloor ?? 6) || originalY - currentY < (options.minCompositeLift ?? 8)) continue;
 
       const edgeGuard = sceneEdgeProtectionAt(restored, alphaMap, x, y, options.sceneEdgeOptions || {});
       if (edgeGuard.weight >= (options.hardSceneGuard ?? 0.58)) {
@@ -144,7 +144,7 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
         continue;
       }
       const darkTarget = smoothstep(5, 34, prediction.luma);
-      const collapseWeight = smoothstep(options.collapseFloor ?? 8, options.fullCollapse ?? 28, collapse);
+      const collapseWeight = smoothstep(options.collapseFloor ?? 6, options.fullCollapse ?? 24, collapse);
       const blackWeight = 1 - smoothstep(blackLuma * 0.45, blackLuma, currentY);
       const alphaWeight = smoothstep(minAlpha, 0.42, alpha) * (1 - smoothstep(0.82, maxAlpha, alpha));
       const sceneWeight = 1 - edgeGuard.weight * 0.94;
@@ -159,11 +159,12 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
 
   const candidate = { width: restored.width, height: restored.height, data: out };
   const after = measureDarkUnderflow(candidate, original, alphaMap, options);
-  const improvement = before.underflowPixels > 0 ? (before.underflowPixels - after.underflowPixels) / before.underflowPixels : 0;
+  const pixelImprovement = before.underflowPixels > 0 ? (before.underflowPixels - after.underflowPixels) / before.underflowPixels : 0;
+  const collapseImprovement = before.meanCollapse > 1e-6 ? (before.meanCollapse - after.meanCollapse) / before.meanCollapse : 0;
   const accepted = correctedPixels > 0
-    && improvement >= (options.minImprovement ?? 0.35)
-    && after.underflowPixels <= Math.floor(before.underflowPixels * 0.72)
-    && after.meanCollapse <= before.meanCollapse * 0.88;
+    && (pixelImprovement >= (options.minImprovement ?? 0.30) || collapseImprovement >= (options.minCollapseImprovement ?? 0.45))
+    && after.underflowPixels <= before.underflowPixels
+    && after.meanCollapse <= before.meanCollapse * 0.78;
 
   return {
     width: restored.width,
@@ -176,8 +177,10 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
       before,
       after: accepted ? after : before,
       candidateAfter: after,
-      improvement: accepted ? improvement : 0,
-      candidateImprovement: improvement,
+      improvement: accepted ? Math.max(pixelImprovement, collapseImprovement) : 0,
+      candidateImprovement: Math.max(pixelImprovement, collapseImprovement),
+      pixelImprovement,
+      collapseImprovement,
       correctedPixels: accepted ? correctedPixels : 0,
       candidatePixels: correctedPixels,
       guardedPixels,
