@@ -41,9 +41,6 @@ export function evaluateFaintAnchorSafety({
   const ultraFaint = score < 0.045;
 
   if (score >= threshold) return { safe: false, reason: 'not-low-confidence', id, distance, signature, ultraFaint };
-  // v1.0.96: allow a correctly anchored ~4% signature to reach calibration,
-  // but never promote it directly. Ultra-faint candidates face stronger temporal
-  // signature requirements and a stricter cleanup-improvement gate below.
   if (score < 0.032) return { safe: false, reason: 'faint-anchor-too-weak', id, distance, signature, ultraFaint };
   if (!knownExactAnchor(id)) return { safe: false, reason: 'faint-anchor-not-exact-profile', id, distance, signature, ultraFaint };
   if (distance > 3.25 || Math.abs(dx) > 3 || Math.abs(dy) > 3) {
@@ -104,7 +101,7 @@ export function evaluateFaintAnchorCalibration({ safety, calibration } = {}) {
   }
   return {
     safe: true,
-    reason: safety.ultraFaint ? 'ultra-faint-anchor-calibrated-match' : 'faint-anchor-calibrated-match',
+    reason: 'faint-anchor-calibrated-match',
     improvement,
     baseline,
     residual,
