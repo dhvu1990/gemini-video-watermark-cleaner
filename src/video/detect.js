@@ -80,8 +80,11 @@ async function evaluateCandidate(frames, candidate) {
 }
 
 async function refineCandidate(frames, base) {
-  const radius = Math.max(4, Math.round(base.candidate.size * 0.22));
-  const step = Math.max(2, Math.round(base.candidate.size / 18));
+  // Catalog positions are known Veo anchors. Refinement is only for a few pixels of
+  // encoder/crop registration error; a broad search can lock onto decorative scene
+  // geometry and move the ROI away from the real watermark.
+  const radius = Math.max(2, Math.min(6, Math.round(base.candidate.size * 0.08)));
+  const step = 2;
   const probes = frames.length <= 5 ? frames : frames.filter((_, i) => i % Math.ceil(frames.length / 5) === 0).slice(0, 5);
   let best = base;
 
@@ -91,7 +94,7 @@ async function refineCandidate(frames, base) {
       if (c.x < 0 || c.y < 0 || c.x + c.size > probes[0].imageData.width || c.y + c.size > probes[0].imageData.height) continue;
       const scores = probes.map((frame) => scoreRegion(frame.imageData, c, base.alphaMap));
       const summary = aggregate(scores);
-      const rank = summary.confidence - (Math.abs(dx) + Math.abs(dy)) / Math.max(1, c.size) * 0.002;
+      const rank = summary.confidence - (Math.abs(dx) + Math.abs(dy)) / Math.max(1, c.size) * 0.004;
       const bestRank = best.confidence;
       if (rank > bestRank) best = { candidate: c, alphaMap: base.alphaMap, scores, ...summary };
     }
@@ -147,15 +150,57 @@ export function estimateAlphaGain(imageData, position, alphaMap) {
   return clamp(median(gains) ?? 1, 0.65, 1.35);
 }
 
+export function evaluateDetectionSafety({ confidence, minConfidence = 0.12, refinement = null } = {}) {
+  const score = Number(confidence) || 0;
+  const threshold = Number.isFinite(minConfidence) ? minConfidence : 0.12;
+  if (score < threshold) return { safe: false, reason: 'low-confidence', refinement };
+  if (!refinement) return { safe: true, reason: 'threshold-match', refinement: null };
+
+  const size = Math.max(1, Number(refinement.size) || 1);
+  const dx = Number(refinement.dx) || 0;
+  const dy = Number(refinement.dy) || 0;
+  const distance = Math.hypot(dx, dy);
+  const maxDistance = Math.max(3, Math.min(6, size * 0.09));
+  const axisLimit = Math.max(3, Math.min(5, size * 0.075));
+  const broadDrift = distance > maxDistance || Math.abs(dx) > axisLimit || Math.abs(dy) > axisLimit;
+
+  // A very strong match may justify a small exceptional registration shift. Weak and
+  // medium matches must stay close to the catalog anchor; otherwise treat the result as
+  // a review-only candidate rather than allowing automatic cleanup.
+  if (broadDrift && score < 0.55) {
+    return {
+      safe: false,
+      reason: 'unsafe-refinement-drift',
+      refinement: { ...refinement, distance, maxDistance, axisLimit }
+    };
+  }
+
+  return {
+    safe: true,
+    reason: broadDrift ? 'strong-match-refinement' : 'anchor-consistent-match',
+    refinement: { ...refinement, distance, maxDistance, axisLimit }
+  };
+}
+
 export async function detectVideoWatermarkFromFrames({ frames, width, height, minConfidence = 0.12, edgePolish = 0.35 }) {
   const candidates = resolveVideoWatermarkCandidates(width, height);
-  if (!frames?.length || !candidates.length) return { detected: false, confidence: 0, reason: 'no-frames-or-candidates' };
+  if (!frames?.length || !candidates.length) return { detected: false, safeToClean: false, confidence: 0, reason: 'no-frames-or-candidates' };
 
   const evaluations = [];
   for (const candidate of candidates) evaluations.push(await evaluateCandidate(frames, candidate));
   evaluations.sort((a, b) => (b.confidence - b.candidate.priority * 0.001) - (a.confidence - a.candidate.priority * 0.001));
-  let best = evaluations[0];
-  best = await refineCandidate(frames, best);
+  const base = evaluations[0];
+  let best = await refineCandidate(frames, base);
+  const refinement = {
+    baseCandidateId: base.candidate.id,
+    baseX: base.candidate.x,
+    baseY: base.candidate.y,
+    baseConfidence: base.confidence,
+    dx: best.candidate.x - base.candidate.x,
+    dy: best.candidate.y - base.candidate.y,
+    size: best.candidate.size,
+    confidenceGain: best.confidence - base.confidence
+  };
   const gains = frames
     .filter((_, index) => (best.scores[index]?.confidence ?? best.confidence) >= 0.05)
     .map((frame) => estimateAlphaGain(frame.imageData, best.candidate, best.alphaMap));
@@ -172,15 +217,20 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     }
   }
 
+  const safety = evaluateDetectionSafety({ confidence: best.confidence, minConfidence, refinement });
+  const detected = best.confidence >= minConfidence && safety.safe;
   const alphaGain = Number.isFinite(calibration?.bodyGain) ? calibration.bodyGain : estimatedAlphaGain;
   return {
-    detected: best.confidence >= minConfidence,
-    reason: best.confidence >= minConfidence ? 'multi-frame-match' : 'low-confidence',
+    detected,
+    safeToClean: detected,
+    reason: detected ? 'multi-frame-match' : safety.reason,
     candidateId: best.candidate.id,
     confidence: best.confidence,
     voteRatio: best.voteRatio,
     maxConfidence: best.maxConfidence,
     position: { x: best.candidate.x, y: best.candidate.y, width: best.candidate.size, height: best.candidate.size },
+    refinement: safety.refinement || refinement,
+    safety,
     alphaGain,
     estimatedAlphaGain,
     calibration: calibration ? {
