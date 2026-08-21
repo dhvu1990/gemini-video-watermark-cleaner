@@ -159,11 +159,12 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
 
   const candidate = { width: restored.width, height: restored.height, data: out };
   const after = measureDarkUnderflow(candidate, original, alphaMap, options);
-  const improvement = before.underflowPixels > 0 ? (before.underflowPixels - after.underflowPixels) / before.underflowPixels : 0;
+  const pixelImprovement = before.underflowPixels > 0 ? (before.underflowPixels - after.underflowPixels) / before.underflowPixels : 0;
+  const collapseImprovement = before.meanCollapse > 1e-6 ? (before.meanCollapse - after.meanCollapse) / before.meanCollapse : 0;
   const accepted = correctedPixels > 0
-    && improvement >= (options.minImprovement ?? 0.30)
-    && after.underflowPixels <= Math.floor(before.underflowPixels * 0.76)
-    && after.meanCollapse <= before.meanCollapse * 0.90;
+    && (pixelImprovement >= (options.minImprovement ?? 0.30) || collapseImprovement >= (options.minCollapseImprovement ?? 0.45))
+    && after.underflowPixels <= before.underflowPixels
+    && after.meanCollapse <= before.meanCollapse * 0.78;
 
   return {
     width: restored.width,
@@ -176,8 +177,10 @@ export function applyDarkUnderflowGuard(restored, original, alphaMap, options = 
       before,
       after: accepted ? after : before,
       candidateAfter: after,
-      improvement: accepted ? improvement : 0,
-      candidateImprovement: improvement,
+      improvement: accepted ? Math.max(pixelImprovement, collapseImprovement) : 0,
+      candidateImprovement: Math.max(pixelImprovement, collapseImprovement),
+      pixelImprovement,
+      collapseImprovement,
       correctedPixels: accepted ? correctedPixels : 0,
       candidatePixels: correctedPixels,
       guardedPixels,
