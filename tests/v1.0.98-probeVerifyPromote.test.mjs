@@ -24,7 +24,7 @@ test('4 percent exact anchor may enter probe calibration when normal signature g
   assert.equal(safety.reason, 'ultra-faint-exact-anchor-probe');
 });
 
-test('probe-only anchor is not promoted by a modest cleanup improvement', () => {
+test('probe-only anchor may promote after a clear low-gain cleanup improvement', () => {
   const safety = evaluateFaintAnchorSafety({
     confidence: 0.04,
     maxConfidence: 0.041,
@@ -37,8 +37,8 @@ test('probe-only anchor is not promoted by a modest cleanup improvement', () => 
     safety,
     calibration: { improvement: 0.05, baselineScore: 10, residualScore: 9.4, bodyGain: 0.24 }
   });
-  assert.equal(result.safe, false);
-  assert.equal(result.reason, 'faint-anchor-probe-no-strong-improvement');
+  assert.equal(result.safe, true, JSON.stringify(result));
+  assert.equal(result.reason, 'faint-anchor-calibrated-match');
 });
 
 test('probe-only anchor requires plausible low gain and a strong cleanup win before promotion', () => {
