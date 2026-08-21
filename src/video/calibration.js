@@ -8,6 +8,7 @@ const SHAPE_SCALES = [0.985, 1.0, 1.015];
 const EDGE_BOOSTS = [0.03, 0.055, 0.085];
 const EDGE_GAINS = [1.0, 1.15, 1.3];
 const BODY_GAIN_FACTORS = [0.78, 0.88, 0.98, 1.08];
+const LOW_GAIN_ANCHORS = [0.10, 0.16, 0.24, 0.34, 0.46];
 const SUBPIXEL_OFFSETS = [-0.4, 0, 0.4];
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -272,10 +273,12 @@ function candidateScore(original, cleaned, alphaMap) {
   return { total: buckets.total * 0.72 + continuity * 0.28, buckets };
 }
 
-export function bodyGainCandidates(estimate = 1) {
-  const safeEstimate = clamp(Number(estimate) || 1, 0.55, 1.35);
-  const values = [...BODY_GAIN_FACTORS.map((factor) => safeEstimate * factor), 1];
-  return [...new Set(values.map((value) => clamp(value, 0.55, 1.35).toFixed(4)))].map(Number).sort((a, b) => a - b);
+export function bodyGainCandidates(estimate = 1, { minimumGain = 0.55, includeLowGainAnchors = false } = {}) {
+  const floor = clamp(Number(minimumGain) || 0.55, 0.08, 0.55);
+  const safeEstimate = clamp(Number(estimate) || 1, floor, 1.35);
+  const anchors = includeLowGainAnchors ? LOW_GAIN_ANCHORS : [];
+  const values = [...BODY_GAIN_FACTORS.map((factor) => safeEstimate * factor), ...anchors, 1];
+  return [...new Set(values.map((value) => clamp(value, floor, 1.35).toFixed(4)))].map(Number).sort((a, b) => a - b);
 }
 
 export async function buildCalibratedAlphaMap(size, calibration = {}) {
@@ -297,6 +300,19 @@ function scoreSamples(samples, alphaMap, bodyGain, edgePolish, polish = true) {
     let cleaned = inverseAlphaRestore(roi, alphaMap, bodyGain);
     if (polish) cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
     const score = candidateScore(roi, cleaned, alphaMap);
+    total += score.total;
+    for (const key of Object.keys(bucketTotals)) bucketTotals[key] += score.buckets[key] || 0;
+  }
+  const count = Math.max(1, samples.length);
+  for (const key of Object.keys(bucketTotals)) bucketTotals[key] /= count;
+  return { total: total / count, buckets: bucketTotals };
+}
+
+function scoreUnmodifiedSamples(samples, alphaMap) {
+  let total = 0;
+  const bucketTotals = { nearZero: 0, edge: 0, lowBody: 0, highBody: 0, total: 0 };
+  for (const roi of samples) {
+    const score = candidateScore(roi, roi, alphaMap);
     total += score.total;
     for (const key of Object.keys(bucketTotals)) bucketTotals[key] += score.buckets[key] || 0;
   }
@@ -335,20 +351,25 @@ export async function calibrateAlphaShape({
   artifactTopN = 4,
   artifactWeight = 0.055,
   artifactMaxRelativeGap = 0.02,
-  artifactMaxAbsoluteGap = 0.20
+  artifactMaxAbsoluteGap = 0.20,
+  minimumBodyGain = 0.55,
+  lowGainSearch = false,
+  compareToNoCleanup = false
 }) {
   const samples = (rois || []).filter(Boolean).slice(0, 3);
   if (!samples.length) return null;
 
-  const initialBodyGain = clamp(Number(bodyGain) || 1, 0.55, 1.35);
+  const gainFloor = clamp(Number(minimumBodyGain) || 0.55, 0.08, 0.55);
+  const initialBodyGain = clamp(Number(bodyGain) || 1, gainFloor, 1.35);
   const baselineMap = await buildCalibratedAlphaMap(size, {
     profile: '96-20260520', shapeScale: 1, edgeBoost: 0.03, edgeGain: 1, offsetX: 0, offsetY: 0
   });
-  const baseline = scoreSamples(samples, baselineMap, initialBodyGain, edgePolish, true);
+  const cleanupBaseline = scoreSamples(samples, baselineMap, initialBodyGain, edgePolish, true);
+  const baseline = compareToNoCleanup ? scoreUnmodifiedSamples(samples, baselineMap) : cleanupBaseline;
 
   let selectedBodyGain = initialBodyGain;
   let selectedBodyScore = Number.POSITIVE_INFINITY;
-  for (const gain of bodyGainCandidates(initialBodyGain)) {
+  for (const gain of bodyGainCandidates(initialBodyGain, { minimumGain: gainFloor, includeLowGainAnchors: lowGainSearch })) {
     const score = scoreSamples(samples, baselineMap, gain, 0, false).total;
     if (score < selectedBodyScore) {
       selectedBodyScore = score;
@@ -493,6 +514,11 @@ export async function calibrateAlphaShape({
   best.initialBodyGain = initialBodyGain;
   best.baselineScore = baseline.total;
   best.baselineBuckets = baseline.buckets;
+  best.cleanupBaselineScore = cleanupBaseline.total;
+  best.cleanupBaselineBuckets = cleanupBaseline.buckets;
+  best.baselineMode = compareToNoCleanup ? 'no-cleanup' : 'default-cleanup';
+  best.minimumBodyGain = gainFloor;
+  best.lowGainSearch = Boolean(lowGainSearch);
   best.bodyOnlyScore = selectedBodyScore;
   best.improvement = baseline.total > 0 ? clamp((baseline.total - best.residualScore) / baseline.total, -1, 1) : 0;
   return best;
