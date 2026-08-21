@@ -1,6 +1,7 @@
 import { APP_VERSION } from './version.js';
 import { formatAntiStreakTelemetry } from './antiStreakTelemetryFormat.js';
 import './batchRetryFix.js';
+import './faintDetectionDiagnosticsUI.js';
 function ensureFootprintFields() {
   if (document.getElementById('antiFootprintScore')) return;
   const anchor = document.getElementById('antiStructuredImprovement');
