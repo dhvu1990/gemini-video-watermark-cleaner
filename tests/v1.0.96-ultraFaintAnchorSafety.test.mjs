@@ -45,7 +45,10 @@ test('ultra-faint exact anchor requires stronger calibration improvement before 
     calibration: { improvement: 0.08, baselineScore: 10, residualScore: 8.9 }
   });
   assert.equal(strong.safe, true, JSON.stringify(strong));
-  assert.equal(strong.reason, 'ultra-faint-anchor-calibrated-match');
+  // Keep the established calibrated-match reason so detect.js preserves the
+  // existing confidence/reporting contract; `ultraFaint` carries the stricter class.
+  assert.equal(strong.reason, 'faint-anchor-calibrated-match');
+  assert.equal(strong.ultraFaint, true);
 });
 
 test('sub-3.2 percent candidate remains blocked even at an exact anchor', () => {
