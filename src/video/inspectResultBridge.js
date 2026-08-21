@@ -18,12 +18,14 @@ export function prepareInspectResultForWorker(result = null) {
   const alphaMap = internalDetection?.alphaMap || null;
   const detection = publicResult.detection || null;
   const preview = publicResult.preview || null;
+  const explicitlyUnsafe = Boolean(detection)
+    && (detection.safeToClean === false || detection.detected === false);
 
   // A review-only candidate must never display a synthetic inverse-alpha result.
   // Cleaning a wrong ROI can manufacture a second Gemini-shaped ghost and makes
   // the preview look as if the tool actually modified the video. Keep the candidate
   // box for review, but make the cleaned preview byte-identical to the original.
-  if (preview?.original?.data && detection?.safeToClean !== true) {
+  if (preview?.original?.data && explicitlyUnsafe) {
     preview.cleaned = cloneRoi(preview.original);
     preview.previewSuppressed = true;
     preview.suppressionReason = detection?.reason || 'unsafe-detection';
@@ -37,7 +39,10 @@ export function prepareInspectResultForWorker(result = null) {
 
   if (!alphaMap) return publicResult;
 
-  if (preview?.cleaned?.data && detection?.safeToClean === true) {
+  // Preserve the historical diagnostic contract for legacy callers that omit a
+  // detection object, while never measuring a synthetic preview that was explicitly
+  // suppressed above.
+  if (preview?.cleaned?.data && !explicitlyUnsafe) {
     const adjacency = measureHighContrastAdjacency(preview.cleaned, alphaMap);
     const classification = classifyHighContrastAdjacency(adjacency);
     const antiStreak = preview.antiStreak || { structured: {}, riskFlags: [] };
