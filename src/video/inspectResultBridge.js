@@ -3,16 +3,46 @@ import {
   measureHighContrastAdjacency
 } from './highContrastAdjacencyDiagnostics.js';
 
+function cloneRoi(roi) {
+  if (!roi?.data || !roi.width || !roi.height) return roi;
+  const data = roi.data instanceof Uint8ClampedArray
+    ? new Uint8ClampedArray(roi.data)
+    : new Uint8ClampedArray(roi.data || []);
+  return { ...roi, data };
+}
+
 export function prepareInspectResultForWorker(result = null) {
   if (!result || typeof result !== 'object') return result;
 
   const { internalDetection, ...publicResult } = result;
   const alphaMap = internalDetection?.alphaMap || null;
+  const detection = publicResult.detection || null;
+  const preview = publicResult.preview || null;
+  const explicitlyUnsafe = Boolean(detection)
+    && (detection.safeToClean === false || detection.detected === false);
+
+  // A review-only candidate must never display a synthetic inverse-alpha result.
+  // Cleaning a wrong ROI can manufacture a second Gemini-shaped ghost and makes
+  // the preview look as if the tool actually modified the video. Keep the candidate
+  // box for review, but make the cleaned preview byte-identical to the original.
+  if (preview?.original?.data && explicitlyUnsafe) {
+    preview.cleaned = cloneRoi(preview.original);
+    preview.previewSuppressed = true;
+    preview.suppressionReason = detection?.reason || 'unsafe-detection';
+    preview.antiStreak = preview.antiStreak || { structured: {}, riskFlags: [] };
+    const existingFlags = Array.isArray(preview.antiStreak.riskFlags)
+      ? preview.antiStreak.riskFlags.filter(Boolean)
+      : [];
+    if (!existingFlags.includes('unsafe-preview-suppressed')) existingFlags.push('unsafe-preview-suppressed');
+    preview.antiStreak.riskFlags = existingFlags;
+  }
 
   if (!alphaMap) return publicResult;
 
-  const preview = publicResult.preview || null;
-  if (preview?.cleaned?.data) {
+  // Preserve the historical diagnostic contract for legacy callers that omit a
+  // detection object, while never measuring a synthetic preview that was explicitly
+  // suppressed above.
+  if (preview?.cleaned?.data && !explicitlyUnsafe) {
     const adjacency = measureHighContrastAdjacency(preview.cleaned, alphaMap);
     const classification = classifyHighContrastAdjacency(adjacency);
     const antiStreak = preview.antiStreak || { structured: {}, riskFlags: [] };
