@@ -1,6 +1,7 @@
 import { resolveVideoWatermarkCandidates } from './catalog.js';
 import { getVideoAlphaMap, setActiveAlphaCalibration } from './alpha.js';
 import { calibrateAlphaShape } from './calibration.js';
+import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function luma(data, idx) { return 0.2126 * data[idx] + 0.7152 * data[idx + 1] + 0.0722 * data[idx + 2]; }
@@ -136,25 +137,87 @@ function signatureSupport(scores = []) {
   };
 }
 
-export function evaluateRegionalSearchSafety({ confidence, voteRatio, maxConfidence, scores = [], minConfidence = 0.12 } = {}) {
+function cropRoi(imageData, position) {
+  const size = position.width ?? position.size;
+  const data = new Uint8ClampedArray(size * size * 4);
+  for (let y = 0; y < size; y++) {
+    const start = ((position.y + y) * imageData.width + position.x) * 4;
+    data.set(imageData.data.subarray(start, start + size * 4), y * size * 4);
+  }
+  return { width: size, height: size, data };
+}
+
+function regionalSceneEdgeSupport(frames = [], candidate, alphaMap) {
+  if (!frames.length || !candidate || !alphaMap) {
+    return { protectRatio: 0, highRatio: 0, meanScore: 0, meanDensity: 0, samples: 0 };
+  }
+  const risks = frames.map((frame) => measureCrossingSceneEdgeRisk(cropRoi(frame.imageData, candidate), alphaMap));
+  const samples = risks.length;
+  const protectRatio = risks.filter((risk) => risk.protect).length / samples;
+  const highRatio = risks.filter((risk) => risk.level === 'high').length / samples;
+  const meanScore = risks.reduce((sum, risk) => sum + (Number(risk.score) || 0), 0) / samples;
+  const meanDensity = risks.reduce((sum, risk) => sum + (Number(risk.density) || 0), 0) / samples;
+  return { protectRatio, highRatio, meanScore, meanDensity, samples };
+}
+
+function distinctCandidate(a, b) {
+  if (!a?.candidate || !b?.candidate) return true;
+  const acx = a.candidate.x + a.candidate.size / 2;
+  const acy = a.candidate.y + a.candidate.size / 2;
+  const bcx = b.candidate.x + b.candidate.size / 2;
+  const bcy = b.candidate.y + b.candidate.size / 2;
+  const distance = Math.hypot(acx - bcx, acy - bcy);
+  return distance >= Math.max(10, Math.min(a.candidate.size, b.candidate.size) * 0.58);
+}
+
+export function evaluateRegionalSearchSafety({
+  confidence,
+  voteRatio,
+  maxConfidence,
+  scores = [],
+  minConfidence = 0.12,
+  sceneEdge = null,
+  runnerUpConfidence = null
+} = {}) {
   const score = Number(confidence) || 0;
   const threshold = Math.max(Number.isFinite(minConfidence) ? minConfidence : 0.12, 0.14);
   const vote = Number(voteRatio) || 0;
   const peak = Number(maxConfidence) || 0;
   const signature = signatureSupport(scores);
-  if (score < threshold) return { safe: false, reason: 'regional-low-confidence', signature };
-  if (vote < 0.60) return { safe: false, reason: 'regional-low-vote', signature };
-  if (peak < Math.max(0.10, threshold * 0.75)) return { safe: false, reason: 'regional-weak-peak', signature };
+  const edge = sceneEdge || { protectRatio: 0, highRatio: 0, meanScore: 0, meanDensity: 0, samples: 0 };
+  const runnerUp = Number(runnerUpConfidence);
+  const dominanceGap = Number.isFinite(runnerUp) ? score - runnerUp : null;
+
+  if (score < threshold) return { safe: false, reason: 'regional-low-confidence', signature, sceneEdge: edge, dominanceGap };
+  if (vote < 0.60) return { safe: false, reason: 'regional-low-vote', signature, sceneEdge: edge, dominanceGap };
+  if (peak < Math.max(0.10, threshold * 0.75)) return { safe: false, reason: 'regional-weak-peak', signature, sceneEdge: edge, dominanceGap };
   if (signature.supportRatio < 0.50 || signature.positiveSpatialRatio < 0.50 || signature.positiveGradientRatio < 0.50) {
-    return { safe: false, reason: 'regional-signature-inconsistent', signature };
+    return { safe: false, reason: 'regional-signature-inconsistent', signature, sceneEdge: edge, dominanceGap };
   }
-  return { safe: true, reason: 'regional-signature-match', signature };
+
+  const persistentSceneEdge = edge.samples >= 3 && (
+    (edge.protectRatio >= 0.50 && edge.meanScore >= 0.20) ||
+    (edge.highRatio >= 0.34 && edge.meanDensity >= 0.022) ||
+    (edge.protectRatio >= 0.75 && edge.meanDensity >= 0.014)
+  );
+  if (persistentSceneEdge) {
+    return { safe: false, reason: 'regional-persistent-scene-edge', signature, sceneEdge: edge, dominanceGap };
+  }
+
+  if (Number.isFinite(dominanceGap) && score < 0.55) {
+    const requiredGap = Math.max(0.022, score * 0.075);
+    if (dominanceGap < requiredGap) {
+      return { safe: false, reason: 'regional-ambiguous-runner-up', signature, sceneEdge: edge, dominanceGap, requiredGap };
+    }
+  }
+
+  return { safe: true, reason: 'regional-signature-match', signature, sceneEdge: edge, dominanceGap };
 }
 
 async function searchRegionalCandidate(frames, width, height, candidates) {
   const sizes = [...new Set(candidates.map((candidate) => candidate.size))];
   const probes = frames.length <= 4 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
-  let best = null;
+  const results = [];
 
   for (const size of sizes) {
     const detectionProfile = size < 40 ? '48' : '96-20260520';
@@ -168,14 +231,20 @@ async function searchRegionalCandidate(frames, width, height, candidates) {
       shortlist.push({ candidate, alphaMap, scores, ...summary });
     }
     shortlist.sort((a, b) => b.confidence - a.confidence);
-    for (const coarse of shortlist.slice(0, 3)) {
+    for (const coarse of shortlist.slice(0, 4)) {
       const refined = await refineCandidate(probes, coarse, Math.max(4, Math.round(size * 0.14)));
       const fullScores = frames.map((frame) => scoreRegion(frame.imageData, refined.candidate, alphaMap));
       const summary = aggregate(fullScores);
-      const result = { candidate: refined.candidate, alphaMap, scores: fullScores, ...summary, source: 'regional-search' };
-      if (!best || result.confidence > best.confidence) best = result;
+      results.push({ candidate: refined.candidate, alphaMap, scores: fullScores, ...summary, source: 'regional-search' });
     }
   }
+
+  if (!results.length) return null;
+  results.sort((a, b) => b.confidence - a.confidence);
+  const best = results[0];
+  const runnerUp = results.slice(1).find((candidate) => distinctCandidate(best, candidate)) || null;
+  best.runnerUpConfidence = runnerUp?.confidence ?? null;
+  best.sceneEdge = regionalSceneEdgeSupport(frames, best.candidate, best.alphaMap);
   return best;
 }
 
@@ -184,16 +253,6 @@ function median(values) {
   if (!clean.length) return null;
   const mid = Math.floor(clean.length / 2);
   return clean.length % 2 ? clean[mid] : (clean[mid - 1] + clean[mid]) / 2;
-}
-
-function cropRoi(imageData, position) {
-  const size = position.width ?? position.size;
-  const data = new Uint8ClampedArray(size * size * 4);
-  for (let y = 0; y < size; y++) {
-    const start = ((position.y + y) * imageData.width + position.x) * 4;
-    data.set(imageData.data.subarray(start, start + size * 4), y * size * 4);
-  }
-  return { width: size, height: size, data };
 }
 
 export function estimateAlphaGain(imageData, position, alphaMap) {
@@ -291,7 +350,9 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
         voteRatio: regional.voteRatio,
         maxConfidence: regional.maxConfidence,
         scores: regional.scores,
-        minConfidence
+        minConfidence,
+        sceneEdge: regional.sceneEdge,
+        runnerUpConfidence: regional.runnerUpConfidence
       });
       const materiallyBetter = regional.confidence >= best.confidence + 0.035;
       const anchorFailed = !anchoredSafetyProbe.safe || best.confidence < minConfidence;
@@ -319,7 +380,15 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
   const estimatedAlphaGain = clamp(median(gains) ?? 1, 0.65, 1.35);
 
   const preCalibrationSafety = detectionSource === 'regional-search'
-    ? (regionalSafety || evaluateRegionalSearchSafety({ confidence: best.confidence, voteRatio: best.voteRatio, maxConfidence: best.maxConfidence, scores: best.scores, minConfidence }))
+    ? (regionalSafety || evaluateRegionalSearchSafety({
+        confidence: best.confidence,
+        voteRatio: best.voteRatio,
+        maxConfidence: best.maxConfidence,
+        scores: best.scores,
+        minConfidence,
+        sceneEdge: best.sceneEdge,
+        runnerUpConfidence: best.runnerUpConfidence
+      }))
     : evaluateDetectionSafety({ confidence: best.confidence, minConfidence, refinement });
 
   let calibration = null;
