@@ -63,6 +63,7 @@ export function buildAdaptiveAlphaUnderflowCap(image, alphaMap, gain = 1, option
   const floorScale = Number.isFinite(options.floorScale) ? options.floorScale : 0.88;
   const minFloor = Number.isFinite(options.minFloor) ? options.minFloor : 6;
   const blackThreshold = Number.isFinite(options.blackThreshold) ? options.blackThreshold : 22;
+  const capRiskMargin = Number.isFinite(options.capRiskMargin) ? options.capRiskMargin : 4;
   const minimumCapDelta = Number.isFinite(options.minimumCapDelta) ? options.minimumCapDelta : 0.015;
   const maxCapFraction = clamp(Number(options.maxCapFraction ?? 0.58), 0.05, 0.75);
 
@@ -91,18 +92,21 @@ export function buildAdaptiveAlphaUnderflowCap(image, alphaMap, gain = 1, option
       const ring = cleanRingLumas(image, alphaMap, x, y, options);
       if (ring.length >= minCleanSamples) {
         const localFloor = Math.max(minFloor, percentile(ring, floorPercentile) * floorScale);
-        const observedY = lumaAt(image, p);
-        const denominator = Math.max(1e-4, 255 - localFloor);
-        const maxAlphaForFloor = clamp((observedY - localFloor) / denominator, 0, 0.99);
-        if (maxAlphaForFloor < rawAlpha - minimumCapDelta) {
-          const maximumReduction = rawAlpha * maxCapFraction;
-          alpha = Math.max(rawAlpha - maximumReduction, maxAlphaForFloor);
-          alpha = Math.min(alpha, rawAlpha);
-          if (alpha < rawAlpha - minimumCapDelta) {
-            alphaCappedPixels++;
-            floorSum += localFloor;
-            rawAlphaSum += rawAlpha;
-            cappedAlphaSum += alpha;
+        const underflowRisk = rawY <= Math.min(blackThreshold, localFloor - capRiskMargin);
+        if (underflowRisk) {
+          const observedY = lumaAt(image, p);
+          const denominator = Math.max(1e-4, 255 - localFloor);
+          const maxAlphaForFloor = clamp((observedY - localFloor) / denominator, 0, 0.99);
+          if (maxAlphaForFloor < rawAlpha - minimumCapDelta) {
+            const maximumReduction = rawAlpha * maxCapFraction;
+            alpha = Math.max(rawAlpha - maximumReduction, maxAlphaForFloor);
+            alpha = Math.min(alpha, rawAlpha);
+            if (alpha < rawAlpha - minimumCapDelta) {
+              alphaCappedPixels++;
+              floorSum += localFloor;
+              rawAlphaSum += rawAlpha;
+              cappedAlphaSum += alpha;
+            }
           }
         }
       }
