@@ -404,10 +404,19 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     : null;
 
   let calibration = null;
-  if (preCalibrationSafety.safe || faintAnchorSafety?.safe) {
+  const faintCalibrationMode = !preCalibrationSafety.safe && faintAnchorSafety?.safe;
+  if (preCalibrationSafety.safe || faintCalibrationMode) {
     const sourceFrames = frames.length <= 3 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
     const rois = sourceFrames.map((frame) => cropRoi(frame.imageData, best.candidate));
-    calibration = await calibrateAlphaShape({ rois, size: best.candidate.size, bodyGain: estimatedAlphaGain, edgePolish });
+    calibration = await calibrateAlphaShape({
+      rois,
+      size: best.candidate.size,
+      bodyGain: estimatedAlphaGain,
+      edgePolish,
+      minimumBodyGain: faintCalibrationMode ? 0.10 : 0.55,
+      lowGainSearch: faintCalibrationMode,
+      compareToNoCleanup: faintCalibrationMode
+    });
     if (calibration?.alphaMap) {
       best.alphaMap = calibration.alphaMap;
       setActiveAlphaCalibration(best.candidate.size, calibration.alphaMap, calibration);
@@ -457,10 +466,14 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
       edgeGain: calibration.edgeGain,
       bodyGain: calibration.bodyGain,
       initialBodyGain: calibration.initialBodyGain,
+      minimumBodyGain: calibration.minimumBodyGain,
+      lowGainSearch: calibration.lowGainSearch,
+      baselineMode: calibration.baselineMode,
       residualScore: calibration.residualScore,
       residualBuckets: calibration.residualBuckets,
       baselineScore: calibration.baselineScore,
       baselineBuckets: calibration.baselineBuckets,
+      cleanupBaselineScore: calibration.cleanupBaselineScore,
       improvement: calibration.improvement
     } : null,
     alphaMap: best.alphaMap,
