@@ -50,8 +50,12 @@ export function resolveVideoWatermarkCandidates(width, height) {
     exact.push(candidate('veo-720p-compact', width, height, 44, 29, 40, 2));
   }
   if (width === 1080 && height === 1920) {
-    exact.push(candidate('veo-portrait-1080-standard', width, height, 72, 108, 108, 0));
-    exact.push(candidate('veo-portrait-1080-inset', width, height, 72, 144, 144, 1));
+    // Real portrait samples show that a faint watermark can overlap strong artwork edges.
+    // When raw confidence is weak, the old standard-first tie bias picked the box 36 px
+    // down/right, clipping the watermark into the ROI corner. Prefer the 144 px inset as
+    // the portrait prior, while leaving raw confidence free to override this small bias.
+    exact.push(candidate('veo-portrait-1080-inset', width, height, 72, 144, 144, 0));
+    exact.push(candidate('veo-portrait-1080-standard', width, height, 72, 108, 108, 12));
   }
   if (width === 720 && height === 1280) {
     exact.push(candidate('veo-portrait-720-relocated', width, height, 48, 96, 96, 0));
