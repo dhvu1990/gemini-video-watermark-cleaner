@@ -59,12 +59,12 @@ export function buildAdaptiveAlphaUnderflowCap(image, alphaMap, gain = 1, option
   const effectiveAlpha = new Float32Array(pixels);
   const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.16;
   const minCleanSamples = Math.max(10, Math.round(options.minCleanSamples ?? 20));
-  const floorPercentile = Number.isFinite(options.floorPercentile) ? options.floorPercentile : 0.30;
-  const floorScale = Number.isFinite(options.floorScale) ? options.floorScale : 0.72;
-  const minFloor = Number.isFinite(options.minFloor) ? options.minFloor : 4;
-  const blackThreshold = Number.isFinite(options.blackThreshold) ? options.blackThreshold : 12;
+  const floorPercentile = Number.isFinite(options.floorPercentile) ? options.floorPercentile : 0.35;
+  const floorScale = Number.isFinite(options.floorScale) ? options.floorScale : 0.88;
+  const minFloor = Number.isFinite(options.minFloor) ? options.minFloor : 6;
+  const blackThreshold = Number.isFinite(options.blackThreshold) ? options.blackThreshold : 22;
   const minimumCapDelta = Number.isFinite(options.minimumCapDelta) ? options.minimumCapDelta : 0.015;
-  const maxCapFraction = clamp(Number(options.maxCapFraction ?? 0.42), 0.05, 0.75);
+  const maxCapFraction = clamp(Number(options.maxCapFraction ?? 0.58), 0.05, 0.75);
 
   let attemptedPixels = 0;
   let alphaCappedPixels = 0;
