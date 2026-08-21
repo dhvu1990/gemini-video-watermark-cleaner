@@ -79,14 +79,14 @@ async function evaluateCandidate(frames, candidate) {
   return { candidate, alphaMap, scores, ...aggregate(scores) };
 }
 
-async function refineCandidate(frames, base) {
-  // Catalog positions are known Veo anchors. Refinement is only for a few pixels of
-  // encoder/crop registration error; a broad search can lock onto decorative scene
-  // geometry and move the ROI away from the real watermark.
-  const radius = Math.max(2, Math.min(6, Math.round(base.candidate.size * 0.08)));
+async function refineCandidate(frames, base, radiusOverride = null) {
+  const radius = Number.isFinite(radiusOverride)
+    ? Math.max(2, Math.round(radiusOverride))
+    : Math.max(2, Math.min(6, Math.round(base.candidate.size * 0.08)));
   const step = 2;
   const probes = frames.length <= 5 ? frames : frames.filter((_, i) => i % Math.ceil(frames.length / 5) === 0).slice(0, 5);
   let best = base;
+  let bestRank = base.confidence;
 
   for (let dy = -radius; dy <= radius; dy += step) {
     for (let dx = -radius; dx <= radius; dx += step) {
@@ -95,8 +95,85 @@ async function refineCandidate(frames, base) {
       const scores = probes.map((frame) => scoreRegion(frame.imageData, c, base.alphaMap));
       const summary = aggregate(scores);
       const rank = summary.confidence - (Math.abs(dx) + Math.abs(dy)) / Math.max(1, c.size) * 0.004;
-      const bestRank = best.confidence;
-      if (rank > bestRank) best = { candidate: c, alphaMap: base.alphaMap, scores, ...summary };
+      if (rank > bestRank) {
+        best = { candidate: c, alphaMap: base.alphaMap, scores, ...summary };
+        bestRank = rank;
+      }
+    }
+  }
+  return best;
+}
+
+export function buildRegionalSearchPositions(width, height, size) {
+  const safeSize = Math.max(16, Math.round(size));
+  const minMargin = Math.max(12, Math.round(safeSize * 0.28));
+  const maxMargin = Math.max(minMargin, Math.min(
+    Math.round(safeSize * 3.4),
+    Math.round(Math.min(width, height) * 0.24)
+  ));
+  const step = Math.max(6, Math.round(safeSize * 0.16));
+  const out = [];
+  for (let marginBottom = minMargin; marginBottom <= maxMargin; marginBottom += step) {
+    for (let marginRight = minMargin; marginRight <= maxMargin; marginRight += step) {
+      const x = Math.round(width - marginRight - safeSize);
+      const y = Math.round(height - marginBottom - safeSize);
+      if (x < 0 || y < 0 || x + safeSize > width || y + safeSize > height) continue;
+      out.push({ x, y, size: safeSize, width: safeSize, height: safeSize, marginRight, marginBottom });
+    }
+  }
+  return out;
+}
+
+function signatureSupport(scores = []) {
+  if (!scores.length) return { supportRatio: 0, positiveSpatialRatio: 0, positiveGradientRatio: 0 };
+  const support = scores.filter((score) => score.confidence >= 0.08 && score.spatial > 0.015 && score.gradient > 0.015).length;
+  const spatial = scores.filter((score) => score.spatial > 0.02).length;
+  const gradient = scores.filter((score) => score.gradient > 0.02).length;
+  return {
+    supportRatio: support / scores.length,
+    positiveSpatialRatio: spatial / scores.length,
+    positiveGradientRatio: gradient / scores.length
+  };
+}
+
+export function evaluateRegionalSearchSafety({ confidence, voteRatio, maxConfidence, scores = [], minConfidence = 0.12 } = {}) {
+  const score = Number(confidence) || 0;
+  const threshold = Math.max(Number.isFinite(minConfidence) ? minConfidence : 0.12, 0.14);
+  const vote = Number(voteRatio) || 0;
+  const peak = Number(maxConfidence) || 0;
+  const signature = signatureSupport(scores);
+  if (score < threshold) return { safe: false, reason: 'regional-low-confidence', signature };
+  if (vote < 0.60) return { safe: false, reason: 'regional-low-vote', signature };
+  if (peak < Math.max(0.10, threshold * 0.75)) return { safe: false, reason: 'regional-weak-peak', signature };
+  if (signature.supportRatio < 0.50 || signature.positiveSpatialRatio < 0.50 || signature.positiveGradientRatio < 0.50) {
+    return { safe: false, reason: 'regional-signature-inconsistent', signature };
+  }
+  return { safe: true, reason: 'regional-signature-match', signature };
+}
+
+async function searchRegionalCandidate(frames, width, height, candidates) {
+  const sizes = [...new Set(candidates.map((candidate) => candidate.size))];
+  const probes = frames.length <= 4 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
+  let best = null;
+
+  for (const size of sizes) {
+    const detectionProfile = size < 40 ? '48' : '96-20260520';
+    const alphaMap = await getVideoAlphaMap(size, detectionProfile, 0);
+    const positions = buildRegionalSearchPositions(width, height, size);
+    const shortlist = [];
+    for (const position of positions) {
+      const candidate = { ...position, id: `veo-regional-${size}` };
+      const scores = probes.map((frame) => scoreRegion(frame.imageData, candidate, alphaMap));
+      const summary = aggregate(scores);
+      shortlist.push({ candidate, alphaMap, scores, ...summary });
+    }
+    shortlist.sort((a, b) => b.confidence - a.confidence);
+    for (const coarse of shortlist.slice(0, 3)) {
+      const refined = await refineCandidate(probes, coarse, Math.max(4, Math.round(size * 0.14)));
+      const fullScores = frames.map((frame) => scoreRegion(frame.imageData, refined.candidate, alphaMap));
+      const summary = aggregate(fullScores);
+      const result = { candidate: refined.candidate, alphaMap, scores: fullScores, ...summary, source: 'regional-search' };
+      if (!best || result.confidence > best.confidence) best = result;
     }
   }
   return best;
@@ -164,9 +241,6 @@ export function evaluateDetectionSafety({ confidence, minConfidence = 0.12, refi
   const axisLimit = Math.max(3, Math.min(5, size * 0.075));
   const broadDrift = distance > maxDistance || Math.abs(dx) > axisLimit || Math.abs(dy) > axisLimit;
 
-  // A very strong match may justify a small exceptional registration shift. Weak and
-  // medium matches must stay close to the catalog anchor; otherwise treat the result as
-  // a review-only candidate rather than allowing automatic cleanup.
   if (broadDrift && score < 0.55) {
     return {
       safe: false,
@@ -191,7 +265,44 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
   evaluations.sort((a, b) => (b.confidence - b.candidate.priority * 0.001) - (a.confidence - a.candidate.priority * 0.001));
   const base = evaluations[0];
   let best = await refineCandidate(frames, base);
-  const refinement = {
+  let detectionSource = 'catalog-anchor';
+  let regionalSafety = null;
+
+  const anchoredSafetyProbe = evaluateDetectionSafety({
+    confidence: best.confidence,
+    minConfidence,
+    refinement: {
+      baseCandidateId: base.candidate.id,
+      baseX: base.candidate.x,
+      baseY: base.candidate.y,
+      baseConfidence: base.confidence,
+      dx: best.candidate.x - base.candidate.x,
+      dy: best.candidate.y - base.candidate.y,
+      size: best.candidate.size,
+      confidenceGain: best.confidence - base.confidence
+    }
+  });
+
+  if (!anchoredSafetyProbe.safe || best.confidence < Math.max(minConfidence + 0.04, 0.18)) {
+    const regional = await searchRegionalCandidate(frames, width, height, candidates);
+    if (regional) {
+      regionalSafety = evaluateRegionalSearchSafety({
+        confidence: regional.confidence,
+        voteRatio: regional.voteRatio,
+        maxConfidence: regional.maxConfidence,
+        scores: regional.scores,
+        minConfidence
+      });
+      const materiallyBetter = regional.confidence >= best.confidence + 0.035;
+      const anchorFailed = !anchoredSafetyProbe.safe || best.confidence < minConfidence;
+      if (regionalSafety.safe && (materiallyBetter || anchorFailed)) {
+        best = regional;
+        detectionSource = 'regional-search';
+      }
+    }
+  }
+
+  const refinement = detectionSource === 'catalog-anchor' ? {
     baseCandidateId: base.candidate.id,
     baseX: base.candidate.x,
     baseY: base.candidate.y,
@@ -200,14 +311,19 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     dy: best.candidate.y - base.candidate.y,
     size: best.candidate.size,
     confidenceGain: best.confidence - base.confidence
-  };
+  } : null;
+
   const gains = frames
     .filter((_, index) => (best.scores[index]?.confidence ?? best.confidence) >= 0.05)
     .map((frame) => estimateAlphaGain(frame.imageData, best.candidate, best.alphaMap));
   const estimatedAlphaGain = clamp(median(gains) ?? 1, 0.65, 1.35);
 
+  const preCalibrationSafety = detectionSource === 'regional-search'
+    ? (regionalSafety || evaluateRegionalSearchSafety({ confidence: best.confidence, voteRatio: best.voteRatio, maxConfidence: best.maxConfidence, scores: best.scores, minConfidence }))
+    : evaluateDetectionSafety({ confidence: best.confidence, minConfidence, refinement });
+
   let calibration = null;
-  if (best.confidence >= minConfidence) {
+  if (preCalibrationSafety.safe) {
     const sourceFrames = frames.length <= 3 ? frames : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
     const rois = sourceFrames.map((frame) => cropRoi(frame.imageData, best.candidate));
     calibration = await calibrateAlphaShape({ rois, size: best.candidate.size, bodyGain: estimatedAlphaGain, edgePolish });
@@ -217,19 +333,21 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
     }
   }
 
-  const safety = evaluateDetectionSafety({ confidence: best.confidence, minConfidence, refinement });
-  const detected = best.confidence >= minConfidence && safety.safe;
+  const safety = preCalibrationSafety;
+  const detected = safety.safe;
   const alphaGain = Number.isFinite(calibration?.bodyGain) ? calibration.bodyGain : estimatedAlphaGain;
   return {
     detected,
     safeToClean: detected,
-    reason: detected ? 'multi-frame-match' : safety.reason,
+    reason: detected ? (detectionSource === 'regional-search' ? 'regional-signature-match' : 'multi-frame-match') : safety.reason,
+    detectionSource,
     candidateId: best.candidate.id,
     confidence: best.confidence,
     voteRatio: best.voteRatio,
     maxConfidence: best.maxConfidence,
     position: { x: best.candidate.x, y: best.candidate.y, width: best.candidate.size, height: best.candidate.size },
     refinement: safety.refinement || refinement,
+    regionalSafety: detectionSource === 'regional-search' ? safety : regionalSafety,
     safety,
     alphaGain,
     estimatedAlphaGain,
