@@ -50,12 +50,14 @@ export function resolveVideoWatermarkCandidates(width, height) {
     exact.push(candidate('veo-720p-compact', width, height, 44, 29, 40, 2));
   }
   if (width === 1080 && height === 1920) {
-    // Real portrait samples show that a faint watermark can overlap strong artwork edges.
-    // When raw confidence is weak, the old standard-first tie bias picked the box 36 px
-    // down/right, clipping the watermark into the ROI corner. Prefer the 144 px inset as
-    // the portrait prior, while leaving raw confidence free to override this small bias.
+    // Portrait 1080 has two known exact anchors separated by 36 px on each axis.
+    // Current real samples use the inset anchor. A weak structured-background false
+    // match at the standard anchor can still score around 6%, so the previous 0.012
+    // priority penalty was not enough. Apply a weak-match prior large enough to make
+    // inset win ambiguous cases, while a genuinely strong standard signature can
+    // still override it on raw confidence.
     exact.push(candidate('veo-portrait-1080-inset', width, height, 72, 144, 144, 0));
-    exact.push(candidate('veo-portrait-1080-standard', width, height, 72, 108, 108, 12));
+    exact.push(candidate('veo-portrait-1080-standard', width, height, 72, 108, 108, 70));
   }
   if (width === 720 && height === 1280) {
     exact.push(candidate('veo-portrait-720-relocated', width, height, 48, 96, 96, 0));
