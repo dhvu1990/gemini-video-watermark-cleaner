@@ -39,7 +39,7 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
     && finite(sceneEdge.score, 1) <= finite(options.maxSceneEdgeScore, 0.30);
 
   return {
-    eligible: residualStrong && priorLowGain && nearSmooth && sceneSafe,
+    eligible: options.enabled !== false && residualStrong && priorLowGain && nearSmooth && sceneSafe,
     residualStrong,
     priorLowGain,
     nearSmooth,
@@ -106,9 +106,9 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
   const accepted = detailAccepted
     && alignedImprovement >= finite(options.minAlignedImprovement, 0.12)
     && afterAligned.score <= beforeAligned.score * finite(options.maxAlignedRatio, 0.88)
-    && afterGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992)
-    && afterGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995)
-    && afterGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01);
+    && afterGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992) + 0.02
+    && afterGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
+    && afterGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + 0.03;
 
   return {
     width: image.width,
