@@ -24,6 +24,7 @@ import {
 import { applyBackgroundAtlas, buildBackgroundAtlas, summarizeAtlas } from './multiFrameRepair.js';
 import { applyNormalEdgeBridge } from './edgeBridge.js';
 import { applyDualRingLumaFinish } from './dualRingFinish.js';
+import { applyStructuredSmoothRescue } from './structuredSmoothRescue.js';
 import { evaluateTemporalDonorAcceptance } from './temporalDonorAcceptance.js';
 import { summarizeAntiStreakDiagnostics } from './antiStreakDiagnostics.js';
 
@@ -142,7 +143,46 @@ export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePo
   }
   repaired = applyNormalEdgeBridge(repaired, paddedAlpha, 0.90);
   const edgeBridge = repaired.edgeBridge || null;
-  repaired = applyDualRingLumaFinish(repaired, paddedAlpha, { strength: 0.56 });
+  const dualFinished = applyDualRingLumaFinish(repaired, paddedAlpha, { strength: 0.56 });
+  const structuredSmoothRescue = applyStructuredSmoothRescue(
+    dualFinished,
+    paddedAlpha,
+    dualFinished.smoothBackground || dualFinished.dualRingFinish?.smoothBackground || {},
+    dualFinished.structuredRing || dualFinished.dualRingFinish?.structuredRing || {}
+  );
+  if (structuredSmoothRescue.structuredSmoothRescue?.accepted) {
+    const rescueDiagnostics = structuredSmoothRescue.structuredSmoothRescue;
+    repaired = {
+      ...dualFinished,
+      width: structuredSmoothRescue.width,
+      height: structuredSmoothRescue.height,
+      data: structuredSmoothRescue.data,
+      structuredSmoothRescue: rescueDiagnostics,
+      smoothBackground: {
+        ...(dualFinished.smoothBackground || {}),
+        mode: 'structured-smooth-rescue',
+        structuredSmoothRescue: rescueDiagnostics
+      },
+      dualRingFinish: {
+        ...(dualFinished.dualRingFinish || {}),
+        structuredSmoothRescue: rescueDiagnostics,
+        smoothBackground: {
+          ...(dualFinished.dualRingFinish?.smoothBackground || {}),
+          mode: 'structured-smooth-rescue',
+          structuredSmoothRescue: rescueDiagnostics
+        }
+      }
+    };
+  } else {
+    repaired = {
+      ...dualFinished,
+      structuredSmoothRescue: structuredSmoothRescue.structuredSmoothRescue || null,
+      dualRingFinish: {
+        ...(dualFinished.dualRingFinish || {}),
+        structuredSmoothRescue: structuredSmoothRescue.structuredSmoothRescue || null
+      }
+    };
+  }
   const antiStreakDiagnostics = summarizeAntiStreakDiagnostics({
     temporalDonorAcceptance,
     temporalDonor: temporalDonorAcceptance.temporalDonor || null,
@@ -158,7 +198,8 @@ export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePo
     temporalDonorAcceptance,
     antiStreakDiagnostics,
     edgeBridge,
-    dualRingFinish: repaired.dualRingFinish || null
+    dualRingFinish: repaired.dualRingFinish || null,
+    structuredSmoothRescue: repaired.structuredSmoothRescue || null
   };
 }
 
@@ -179,7 +220,8 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     temporalDonorAcceptance: repaired.temporalDonorAcceptance,
     antiStreak: repaired.antiStreakDiagnostics,
     edgeBridge: repaired.edgeBridge,
-    dualRingFinish: repaired.dualRingFinish
+    dualRingFinish: repaired.dualRingFinish,
+    structuredSmoothRescue: repaired.structuredSmoothRescue
   };
 }
 
