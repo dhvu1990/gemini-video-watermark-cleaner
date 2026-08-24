@@ -102,13 +102,18 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
   const alignedImprovement = ratioImprovement(beforeAligned.score, afterAligned.score);
   const detailAccepted = candidate.smoothBackground?.accepted !== false
     && candidate.smoothBackground?.detailPreservation?.accepted !== false;
+  const maxChromaIncrease = finite(options.maxChromaIncrease, 0.75);
 
+  // Smooth reconstruction can introduce a very small chroma residual when the
+  // incoming ROI is nearly chroma-perfect. A pure ratio gate is unstable near zero,
+  // so keep the ratio check but add a tight absolute allowance. Global total/luma
+  // still must improve materially, which prevents accepting a color-shifted result.
   const accepted = detailAccepted
     && alignedImprovement >= finite(options.minAlignedImprovement, 0.12)
     && afterAligned.score <= beforeAligned.score * finite(options.maxAlignedRatio, 0.88)
     && afterGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992) + 0.02
     && afterGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
-    && afterGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + 0.03;
+    && afterGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + maxChromaIncrease;
 
   return {
     width: image.width,
@@ -129,6 +134,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       candidateImprovement: improvement,
       alignedImprovement: accepted ? alignedImprovement : 0,
       candidateAlignedImprovement: alignedImprovement,
+      maxChromaIncrease,
       smoothBackground: candidate.smoothBackground || null
     }
   };
