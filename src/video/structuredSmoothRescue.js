@@ -2,6 +2,8 @@ import { applySmoothBackgroundReconstruction } from './smoothBackground.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
 import { measureStructuredRingResidual } from './structuredRingSuppress.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
+import { applyProtectedResidualRescue } from './protectedResidualRescue.js';
+import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
   const n = Number(value);
@@ -24,9 +26,6 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
     && density >= finite(options.minAlignedDensity, 0.018);
   const priorLowGain = priorImprovement <= finite(options.maxPriorImprovement, 0.10);
 
-  // Judge smoothness mostly from the clean exterior. A watermark-shaped residual can
-  // itself inflate coreStructureDensity, so that metric must not permanently force a
-  // genuinely flat background into the structured branch.
   const nearSmooth = Boolean(smoothAnalysis?.coefficients)
     && finite(smoothAnalysis.surfaceMae, Infinity) <= finite(options.maxSurfaceMae, 8.8)
     && finite(smoothAnalysis.edgeDensity, Infinity) <= finite(options.maxEdgeDensity, 0.090)
@@ -51,91 +50,133 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
   };
 }
 
+function finalResidualOptions(options = {}) {
+  return {
+    // Keep the final visual rescue conservative by default. The protected-residual
+    // module can still be tuned explicitly for known residual fixtures, but the
+    // runtime path must not reinterpret ordinary texture as a watermark imprint.
+    minScore: finite(options.finalResidualMinScore, 1.55),
+    minDensity: finite(options.finalResidualMinDensity, 0.16),
+    minSamples: Math.max(8, Math.round(finite(options.finalResidualMinSamples, 18))),
+    minImprovement: finite(options.finalResidualMinImprovement, 0.02),
+    strength: finite(options.finalResidualStrength, 0.44),
+    maxBlend: finite(options.finalResidualMaxBlend, 0.38),
+    maxLumaDelta: finite(options.finalResidualMaxLumaDelta, 10),
+    hardSceneGuard: finite(options.finalResidualHardSceneGuard, 0.66),
+    ...(options.finalResidualOptions || {})
+  };
+}
+
 export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}, structuredRing = {}, options = {}) {
   const gate = evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoothAnalysis, structuredRing, options);
   const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
   const beforeAligned = gate.aligned;
-  if (!gate.eligible) {
-    return {
-      width: image.width,
-      height: image.height,
-      data: new Uint8ClampedArray(image.data),
-      structuredSmoothRescue: {
-        enabled: options.enabled !== false,
-        attempted: false,
-        accepted: false,
-        ...gate,
-        beforeGlobal,
-        afterGlobal: beforeGlobal,
-        beforeAligned,
-        afterAligned: beforeAligned,
-        improvement: 0,
-        alignedImprovement: 0
+  let structuredAttempted = false;
+  let structuredMetricsAccepted = false;
+  let structuredAccepted = false;
+  let selected = { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data) };
+  let structuredCandidateGlobal = beforeGlobal;
+  let structuredCandidateAligned = beforeAligned;
+  let improvement = 0;
+  let alignedImprovement = 0;
+  let candidateSmoothBackground = null;
+  let artifactGuard = null;
+  const maxChromaIncrease = finite(options.maxChromaIncrease, 0.75);
+
+  if (gate.eligible) {
+    structuredAttempted = true;
+    const candidate = applySmoothBackgroundReconstruction(
+      image,
+      alphaMap,
+      {
+        ...smoothAnalysis,
+        safe: true,
+        mode: 'smooth-rebuild',
+        reason: `structured-smooth-rescue:${smoothAnalysis?.reason || 'near-smooth'}`
+      },
+      {
+        strength: finite(options.strength, 0.86),
+        dilationRadius: finite(options.dilationRadius, 3),
+        microSmooth: finite(options.microSmooth, 0.10),
+        preservationFallbackStrength: finite(options.fallbackStrength, 0.38),
+        preservationFallbackDilation: finite(options.fallbackDilation, 2),
+        preservationFallbackMicroSmooth: finite(options.fallbackMicroSmooth, 0.06),
+        detailPreservationOptions: options.detailPreservationOptions || {}
       }
+    );
+
+    const candidateImage = { width: candidate.width, height: candidate.height, data: candidate.data };
+    structuredCandidateGlobal = measurePostCleanupResidual(candidateImage, alphaMap);
+    structuredCandidateAligned = measureStructuredRingResidual(candidateImage, alphaMap);
+    improvement = ratioImprovement(beforeGlobal.total, structuredCandidateGlobal.total);
+    alignedImprovement = ratioImprovement(beforeAligned.score, structuredCandidateAligned.score);
+    candidateSmoothBackground = candidate.smoothBackground || null;
+    const detailAccepted = candidate.smoothBackground?.accepted !== false
+      && candidate.smoothBackground?.detailPreservation?.accepted !== false;
+    structuredMetricsAccepted = detailAccepted
+      && alignedImprovement >= finite(options.minAlignedImprovement, 0.12)
+      && structuredCandidateAligned.score <= beforeAligned.score * finite(options.maxAlignedRatio, 0.88)
+      && structuredCandidateGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992) + 0.02
+      && structuredCandidateGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
+      && structuredCandidateGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + maxChromaIncrease;
+
+    artifactGuard = evaluateSmoothRebuildArtifactGuard(
+      image,
+      candidateImage,
+      alphaMap,
+      options.artifactGuardOptions || {}
+    );
+    structuredAccepted = structuredMetricsAccepted && !artifactGuard.rollback;
+
+    if (structuredAccepted) selected = candidateImage;
+  }
+
+  const finalCandidate = applyProtectedResidualRescue(selected, alphaMap, finalResidualOptions(options));
+  const finalVisualResidual = finalCandidate.protectedResidualRescue || null;
+  const finalAccepted = Boolean(finalVisualResidual?.accepted);
+  if (finalAccepted) {
+    selected = {
+      width: finalCandidate.width,
+      height: finalCandidate.height,
+      data: new Uint8ClampedArray(finalCandidate.data)
     };
   }
 
-  const candidate = applySmoothBackgroundReconstruction(
-    image,
-    alphaMap,
-    {
-      ...smoothAnalysis,
-      safe: true,
-      mode: 'smooth-rebuild',
-      reason: `structured-smooth-rescue:${smoothAnalysis?.reason || 'near-smooth'}`
-    },
-    {
-      strength: finite(options.strength, 0.86),
-      dilationRadius: finite(options.dilationRadius, 3),
-      microSmooth: finite(options.microSmooth, 0.10),
-      preservationFallbackStrength: finite(options.fallbackStrength, 0.38),
-      preservationFallbackDilation: finite(options.fallbackDilation, 2),
-      preservationFallbackMicroSmooth: finite(options.fallbackMicroSmooth, 0.06),
-      detailPreservationOptions: options.detailPreservationOptions || {}
-    }
-  );
-
-  const candidateImage = { width: candidate.width, height: candidate.height, data: candidate.data };
-  const afterGlobal = measurePostCleanupResidual(candidateImage, alphaMap);
-  const afterAligned = measureStructuredRingResidual(candidateImage, alphaMap);
-  const improvement = ratioImprovement(beforeGlobal.total, afterGlobal.total);
-  const alignedImprovement = ratioImprovement(beforeAligned.score, afterAligned.score);
-  const detailAccepted = candidate.smoothBackground?.accepted !== false
-    && candidate.smoothBackground?.detailPreservation?.accepted !== false;
-  const maxChromaIncrease = finite(options.maxChromaIncrease, 0.75);
-
-  // Smooth reconstruction can introduce a very small chroma residual when the
-  // incoming ROI is nearly chroma-perfect. A pure ratio gate is unstable near zero,
-  // so keep the ratio check but add a tight absolute allowance. Global total/luma
-  // still must improve materially, which prevents accepting a color-shifted result.
-  const accepted = detailAccepted
-    && alignedImprovement >= finite(options.minAlignedImprovement, 0.12)
-    && afterAligned.score <= beforeAligned.score * finite(options.maxAlignedRatio, 0.88)
-    && afterGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992) + 0.02
-    && afterGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
-    && afterGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + maxChromaIncrease;
+  const accepted = structuredAccepted || finalAccepted;
+  const acceptedMode = finalAccepted
+    ? (structuredAccepted ? 'structured-smooth+final-visual' : 'final-visual-residual-rescue')
+    : (structuredAccepted ? 'structured-smooth-rescue' : 'none');
+  const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
+  const finalAligned = measureStructuredRingResidual(selected, alphaMap);
 
   return {
-    width: image.width,
-    height: image.height,
-    data: accepted ? new Uint8ClampedArray(candidate.data) : new Uint8ClampedArray(image.data),
+    width: selected.width,
+    height: selected.height,
+    data: selected.data,
     structuredSmoothRescue: {
-      enabled: true,
-      attempted: true,
+      enabled: options.enabled !== false,
+      attempted: structuredAttempted || Boolean(finalVisualResidual?.attempted),
       accepted,
+      acceptedMode,
+      structuredAttempted,
+      structuredMetricsAccepted,
+      structuredAccepted,
+      finalVisualAccepted: finalAccepted,
       ...gate,
       beforeGlobal,
-      afterGlobal: accepted ? afterGlobal : beforeGlobal,
-      candidateAfterGlobal: afterGlobal,
+      afterGlobal: finalGlobal,
+      candidateAfterGlobal: structuredCandidateGlobal,
       beforeAligned,
-      afterAligned: accepted ? afterAligned : beforeAligned,
-      candidateAfterAligned: afterAligned,
-      improvement: accepted ? improvement : 0,
+      afterAligned: finalAligned,
+      candidateAfterAligned: structuredCandidateAligned,
+      improvement: ratioImprovement(beforeGlobal.total, finalGlobal.total),
       candidateImprovement: improvement,
-      alignedImprovement: accepted ? alignedImprovement : 0,
+      alignedImprovement: ratioImprovement(beforeAligned.score, finalAligned.score),
       candidateAlignedImprovement: alignedImprovement,
       maxChromaIncrease,
-      smoothBackground: candidate.smoothBackground || null
+      smoothBackground: candidateSmoothBackground,
+      artifactGuard,
+      finalVisualResidual
     }
   };
 }

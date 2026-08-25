@@ -203,12 +203,15 @@ export function applyProtectedResidualRescue(image, alphaMap, options = {}) {
   const after = measureProtectedResidualField(candidate.image, alphaMap, options);
   const afterGlobal = measurePostCleanupResidual(candidate.image, alphaMap);
   const improvement = before.score > 1e-6 ? (before.score - after.score) / before.score : 0;
+  const maxChromaIncrease = Number.isFinite(options.maxChromaIncrease) ? options.maxChromaIncrease : 0.55;
+  const maxTotalIncrease = Number.isFinite(options.maxTotalIncrease) ? options.maxTotalIncrease : 0.06;
+  const maxLumaIncrease = Number.isFinite(options.maxLumaIncrease) ? options.maxLumaIncrease : 0.06;
   const accepted = candidate.candidatePixels > 0
     && improvement >= (options.minImprovement ?? 0.02)
     && after.score <= before.score * 0.98
-    && afterGlobal.total <= beforeGlobal.total * 1.003
-    && afterGlobal.luma <= beforeGlobal.luma * 1.006
-    && afterGlobal.chroma <= beforeGlobal.chroma * 1.004;
+    && afterGlobal.total <= beforeGlobal.total * 1.003 + maxTotalIncrease
+    && afterGlobal.luma <= beforeGlobal.luma * 1.006 + maxLumaIncrease
+    && afterGlobal.chroma <= beforeGlobal.chroma * 1.004 + maxChromaIncrease;
   return {
     width: image.width,
     height: image.height,
@@ -229,7 +232,10 @@ export function applyProtectedResidualRescue(image, alphaMap, options = {}) {
       correctedPixels: accepted ? candidate.candidatePixels : 0,
       sceneGuardedPixels: candidate.sceneGuardedPixels,
       textureImprintPixels: candidate.textureImprintPixels,
-      meanBlend: accepted ? candidate.meanBlend : 0
+      meanBlend: accepted ? candidate.meanBlend : 0,
+      maxChromaIncrease,
+      maxTotalIncrease,
+      maxLumaIncrease
     }
   };
 }

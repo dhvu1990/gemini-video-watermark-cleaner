@@ -33,7 +33,51 @@ test('batch detection view exposes match, ROI, background mode and risk flags', 
 test('batch background labels mirror the main preview cleanup mode', () => {
   assert.equal(batchBackgroundLabel({ dualRingFinish: { smoothBackground: { mode: 'smooth-rebuild' } } }), 'Smooth background rebuild');
   assert.equal(batchBackgroundLabel({ dualRingFinish: { smoothBackground: { mode: 'empty-hard-rebuild' } } }), 'Safe empty-zone hard suppression');
+  assert.equal(batchBackgroundLabel({ structuredSmoothRescue: { acceptedMode: 'final-visual-residual-rescue' } }), 'Final visual residual rescue');
   assert.equal(batchBackgroundLabel(null), 'Structured-background fallback');
+});
+
+test('final visual verifier surfaces a residual even when legacy risk flags are empty', () => {
+  const view = buildBatchDetectionView({
+    detected: true,
+    confidence: 0.93,
+    candidateId: 'veo-portrait-1080-inset',
+    position: { x: 864, y: 1704, width: 72, height: 72 }
+  }, {
+    antiStreak: { riskFlags: [] },
+    structuredSmoothRescue: {
+      acceptedMode: 'none',
+      finalVisualResidual: {
+        attempted: true,
+        accepted: false,
+        before: { score: 2.2, candidateDensity: 0.18, samples: 54 }
+      }
+    }
+  });
+  assert.match(view.riskFlags, /final-residual-rescue-rejected/);
+  assert.match(view.riskFlags, /final-visual-watermark-residual/);
+});
+
+test('accepted final visual rescue is labeled without a stale residual warning', () => {
+  const view = buildBatchDetectionView({
+    detected: true,
+    confidence: 0.91,
+    candidateId: 'veo-portrait-1080-inset',
+    position: { x: 864, y: 1704, width: 72, height: 72 }
+  }, {
+    antiStreak: { riskFlags: [] },
+    structuredSmoothRescue: {
+      acceptedMode: 'final-visual-residual-rescue',
+      finalVisualResidual: {
+        attempted: true,
+        accepted: true,
+        before: { score: 2.4, candidateDensity: 0.20, samples: 61 },
+        after: { score: 0.7, candidateDensity: 0.08, samples: 21 }
+      }
+    }
+  });
+  assert.equal(view.note, 'Final visual residual rescue');
+  assert.equal(view.riskFlags, 'none');
 });
 
 test('cached batch inspect results are reused only while relevant inspect settings match', () => {
