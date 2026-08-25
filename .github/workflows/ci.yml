@@ -20,9 +20,18 @@ jobs:
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
       - run: npm run check
-      - name: Diagnose structured smooth rescue tests
-        run: node --test tests/structuredSmoothRescue.test.mjs
-      - name: Diagnose sequential full suite
-        run: node --test --test-concurrency=1 tests/*.test.mjs
-      - run: npm test
+      - name: Run npm test with concise failure output
+        shell: bash
+        run: |
+          set +e
+          npm test > test-output.txt 2>&1
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "--- concise npm test failure ---"
+            grep -E -B 3 -A 12 'not ok|AssertionError|ERR_ASSERTION|location:|error:' test-output.txt | tail -n 160 || true
+            echo "--- final npm test summary ---"
+            tail -n 30 test-output.txt
+            exit "$code"
+          fi
+          cat test-output.txt
       - run: npm run build
