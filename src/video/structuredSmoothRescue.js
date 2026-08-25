@@ -69,6 +69,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
   const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
   const beforeAligned = gate.aligned;
   let structuredAttempted = false;
+  let structuredMetricsAccepted = false;
   let structuredAccepted = false;
   let selected = { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data) };
   let structuredCandidateGlobal = beforeGlobal;
@@ -109,22 +110,23 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     candidateSmoothBackground = candidate.smoothBackground || null;
     const detailAccepted = candidate.smoothBackground?.accepted !== false
       && candidate.smoothBackground?.detailPreservation?.accepted !== false;
-    const metricsAccepted = detailAccepted
+    structuredMetricsAccepted = detailAccepted
       && alignedImprovement >= finite(options.minAlignedImprovement, 0.12)
       && structuredCandidateAligned.score <= beforeAligned.score * finite(options.maxAlignedRatio, 0.88)
       && structuredCandidateGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992) + 0.02
       && structuredCandidateGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
       && structuredCandidateGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + maxChromaIncrease;
 
-    if (metricsAccepted) {
-      artifactGuard = evaluateSmoothRebuildArtifactGuard(
-        image,
-        candidateImage,
-        alphaMap,
-        options.artifactGuardOptions || {}
-      );
-      structuredAccepted = !artifactGuard.rollback;
-    }
+    // Evaluate every generated structured candidate so diagnostics always explain
+    // whether the visual artifact guard would allow it. Selection still requires
+    // both the existing metric gates and the guard to pass.
+    artifactGuard = evaluateSmoothRebuildArtifactGuard(
+      image,
+      candidateImage,
+      alphaMap,
+      options.artifactGuardOptions || {}
+    );
+    structuredAccepted = structuredMetricsAccepted && !artifactGuard.rollback;
 
     if (structuredAccepted) selected = candidateImage;
   }
@@ -160,6 +162,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       accepted,
       acceptedMode,
       structuredAttempted,
+      structuredMetricsAccepted,
       structuredAccepted,
       finalVisualAccepted: finalAccepted,
       ...gate,
