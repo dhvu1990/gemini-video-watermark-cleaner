@@ -14,11 +14,29 @@ export function humanizeBatchCandidate(candidateId = '') {
 }
 
 export function batchBackgroundLabel(preview = null) {
+  const rescueMode = preview?.structuredSmoothRescue?.acceptedMode || null;
+  if (rescueMode === 'final-visual-residual-rescue') return 'Final visual residual rescue';
+  if (rescueMode === 'structured-smooth+final-visual') return 'Structured smooth + final visual rescue';
+  if (rescueMode === 'structured-smooth-rescue') return 'Structured smooth residual rescue';
   const mode = preview?.dualRingFinish?.smoothBackground?.mode || null;
   if (mode === 'empty-hard-rebuild') return 'Safe empty-zone hard suppression';
   if (mode === 'smooth-rebuild') return 'Smooth background rebuild';
   if (mode) return String(mode).replace(/-/g, ' ');
   return 'Structured-background fallback';
+}
+
+function finalVisualRiskFlags(preview = null) {
+  const finalResidual = preview?.structuredSmoothRescue?.finalVisualResidual || null;
+  if (!finalResidual) return [];
+  const before = finalResidual.before || {};
+  const after = finalResidual.accepted ? (finalResidual.after || before) : before;
+  const score = Math.max(0, finite(after.score, 0));
+  const density = Math.max(0, finite(after.candidateDensity, 0));
+  const samples = Math.max(0, Math.round(finite(after.samples, 0)));
+  const flags = [];
+  if (finalResidual.attempted && !finalResidual.accepted) flags.push('final-residual-rescue-rejected');
+  if (score >= 1.20 && density >= 0.07 && samples >= 10) flags.push('final-visual-watermark-residual');
+  return flags;
 }
 
 export function buildBatchDetectionView(detection = null, preview = null) {
@@ -48,9 +66,10 @@ export function buildBatchDetectionView(detection = null, preview = null) {
         height: Math.round(finite(detection.position.height, detection.position.width || 0))
       }
     : null;
-  const flags = Array.isArray(preview?.antiStreak?.riskFlags)
+  const existingFlags = Array.isArray(preview?.antiStreak?.riskFlags)
     ? preview.antiStreak.riskFlags.filter(Boolean)
     : [];
+  const flags = [...new Set([...existingFlags, ...finalVisualRiskFlags(preview)])];
 
   return {
     ready: true,
