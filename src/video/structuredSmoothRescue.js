@@ -52,14 +52,17 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
 
 function finalResidualOptions(options = {}) {
   return {
-    minScore: finite(options.finalResidualMinScore, 0.90),
-    minDensity: finite(options.finalResidualMinDensity, 0.07),
-    minSamples: Math.max(8, Math.round(finite(options.finalResidualMinSamples, 10))),
-    minImprovement: finite(options.finalResidualMinImprovement, 0.012),
-    strength: finite(options.finalResidualStrength, 0.50),
-    maxBlend: finite(options.finalResidualMaxBlend, 0.40),
-    maxLumaDelta: finite(options.finalResidualMaxLumaDelta, 12),
-    hardSceneGuard: finite(options.finalResidualHardSceneGuard, 0.58),
+    // Keep the final visual rescue conservative by default. The protected-residual
+    // module can still be tuned explicitly for known residual fixtures, but the
+    // runtime path must not reinterpret ordinary texture as a watermark imprint.
+    minScore: finite(options.finalResidualMinScore, 1.55),
+    minDensity: finite(options.finalResidualMinDensity, 0.16),
+    minSamples: Math.max(8, Math.round(finite(options.finalResidualMinSamples, 18))),
+    minImprovement: finite(options.finalResidualMinImprovement, 0.02),
+    strength: finite(options.finalResidualStrength, 0.44),
+    maxBlend: finite(options.finalResidualMaxBlend, 0.38),
+    maxLumaDelta: finite(options.finalResidualMaxLumaDelta, 10),
+    hardSceneGuard: finite(options.finalResidualHardSceneGuard, 0.66),
     ...(options.finalResidualOptions || {})
   };
 }
@@ -117,9 +120,6 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       && structuredCandidateGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
       && structuredCandidateGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + maxChromaIncrease;
 
-    // Evaluate every generated structured candidate so diagnostics always explain
-    // whether the visual artifact guard would allow it. Selection still requires
-    // both the existing metric gates and the guard to pass.
     artifactGuard = evaluateSmoothRebuildArtifactGuard(
       image,
       candidateImage,
@@ -131,9 +131,6 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     if (structuredAccepted) selected = candidateImage;
   }
 
-  // Always run a final visual-shape verifier. This is intentionally independent of
-  // the structured-ring accept state so a visually obvious residual cannot hide
-  // behind a successful earlier pass or an empty diagnostics flag set.
   const finalCandidate = applyProtectedResidualRescue(selected, alphaMap, finalResidualOptions(options));
   const finalVisualResidual = finalCandidate.protectedResidualRescue || null;
   const finalAccepted = Boolean(finalVisualResidual?.accepted);
