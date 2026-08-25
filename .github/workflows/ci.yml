@@ -22,5 +22,11 @@ jobs:
       - run: npm run check
       - name: Diagnose structured smooth rescue tests
         run: node --test tests/structuredSmoothRescue.test.mjs
+      - name: Diagnose test half A
+        continue-on-error: true
+        run: find tests -maxdepth 1 -name '*.test.mjs' | sort | sed -n '1,30p' | xargs node --test
+      - name: Diagnose test half B
+        continue-on-error: true
+        run: find tests -maxdepth 1 -name '*.test.mjs' | sort | sed -n '31,$p' | xargs node --test
       - run: npm test
       - run: npm run build
