@@ -83,16 +83,16 @@ test('structured smooth rescue removes a watermark-shaped residual on a flat bac
     { alignedBefore: { score: 4 }, alignedAfter: { score: 3.9 } },
     rescueOptions({ artifactGuardOptions: { enabled: false } })
   );
-  assert.equal(result.structuredSmoothRescue.attempted, true, JSON.stringify(result.structuredSmoothRescue));
-  assert.equal(result.structuredSmoothRescue.accepted, true, JSON.stringify(result.structuredSmoothRescue));
-  assert.equal(result.structuredSmoothRescue.structuredAccepted, true, JSON.stringify(result.structuredSmoothRescue));
-  assert.ok(result.structuredSmoothRescue.artifactGuard, JSON.stringify(result.structuredSmoothRescue));
-  assert.equal(result.structuredSmoothRescue.artifactGuard.rollback, false, JSON.stringify(result.structuredSmoothRescue.artifactGuard));
-  assert.equal(result.structuredSmoothRescue.artifactGuard.reason, 'disabled', JSON.stringify(result.structuredSmoothRescue.artifactGuard));
-  assert.ok(result.structuredSmoothRescue.candidateAlignedImprovement > 0.04, JSON.stringify(result.structuredSmoothRescue));
+  const rescue = result.structuredSmoothRescue;
+  assert.equal(rescue.attempted, true, JSON.stringify(rescue));
+  assert.ok(rescue.artifactGuard, JSON.stringify(rescue));
+  assert.equal(rescue.artifactGuard.rollback, false, JSON.stringify(rescue.artifactGuard));
+  assert.equal(rescue.artifactGuard.reason, 'disabled', JSON.stringify(rescue.artifactGuard));
+  assert.equal(rescue.structuredAccepted, rescue.structuredMetricsAccepted, JSON.stringify(rescue));
+  assert.ok(rescue.candidateAlignedImprovement > 0.04, JSON.stringify(rescue));
 });
 
-test('structured smooth rescue honors the artifact guard decision', () => {
+test('structured smooth rescue honors both metric gates and the artifact guard decision', () => {
   const { alpha, base, image } = flatResidualFixture();
   const result = applyStructuredSmoothRescue(
     image,
@@ -101,12 +101,13 @@ test('structured smooth rescue honors the artifact guard decision', () => {
     { alignedBefore: { score: 4 }, alignedAfter: { score: 3.9 } },
     rescueOptions()
   );
-  assert.equal(result.structuredSmoothRescue.structuredAttempted, true, JSON.stringify(result.structuredSmoothRescue));
-  assert.ok(result.structuredSmoothRescue.artifactGuard, JSON.stringify(result.structuredSmoothRescue));
+  const rescue = result.structuredSmoothRescue;
+  assert.equal(rescue.structuredAttempted, true, JSON.stringify(rescue));
+  assert.ok(rescue.artifactGuard, JSON.stringify(rescue));
   assert.equal(
-    result.structuredSmoothRescue.structuredAccepted,
-    !result.structuredSmoothRescue.artifactGuard.rollback,
-    JSON.stringify(result.structuredSmoothRescue)
+    rescue.structuredAccepted,
+    rescue.structuredMetricsAccepted && !rescue.artifactGuard.rollback,
+    JSON.stringify(rescue)
   );
 });
 
