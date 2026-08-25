@@ -75,6 +75,9 @@ test('structured smooth rescue removes a watermark-shaped residual on a flat bac
   );
   assert.equal(result.structuredSmoothRescue.attempted, true, JSON.stringify(result.structuredSmoothRescue));
   assert.equal(result.structuredSmoothRescue.accepted, true, JSON.stringify(result.structuredSmoothRescue));
+  assert.equal(result.structuredSmoothRescue.structuredAccepted, true, JSON.stringify(result.structuredSmoothRescue));
+  assert.ok(result.structuredSmoothRescue.artifactGuard, JSON.stringify(result.structuredSmoothRescue));
+  assert.equal(result.structuredSmoothRescue.artifactGuard.rollback, false, JSON.stringify(result.structuredSmoothRescue.artifactGuard));
   assert.ok(result.structuredSmoothRescue.candidateAlignedImprovement > 0.04, JSON.stringify(result.structuredSmoothRescue));
 });
 
