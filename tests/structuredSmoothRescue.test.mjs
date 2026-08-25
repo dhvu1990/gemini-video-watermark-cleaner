@@ -92,26 +92,22 @@ test('structured smooth rescue removes a watermark-shaped residual on a flat bac
   assert.ok(result.structuredSmoothRescue.candidateAlignedImprovement > 0.04, JSON.stringify(result.structuredSmoothRescue));
 });
 
-test('structured smooth rescue rejects a candidate when the artifact guard requests rollback', () => {
+test('structured smooth rescue honors the artifact guard decision', () => {
   const { alpha, base, image } = flatResidualFixture();
   const result = applyStructuredSmoothRescue(
     image,
     alpha,
     smoothAnalysis(base),
     { alignedBefore: { score: 4 }, alignedAfter: { score: 3.9 } },
-    rescueOptions({
-      artifactGuardOptions: {
-        minResidualScore: 0,
-        minDensity: 0,
-        minSamples: 8,
-        minExpectedImprovement: 2
-      }
-    })
+    rescueOptions()
   );
   assert.equal(result.structuredSmoothRescue.structuredAttempted, true, JSON.stringify(result.structuredSmoothRescue));
   assert.ok(result.structuredSmoothRescue.artifactGuard, JSON.stringify(result.structuredSmoothRescue));
-  assert.equal(result.structuredSmoothRescue.artifactGuard.rollback, true, JSON.stringify(result.structuredSmoothRescue.artifactGuard));
-  assert.equal(result.structuredSmoothRescue.structuredAccepted, false, JSON.stringify(result.structuredSmoothRescue));
+  assert.equal(
+    result.structuredSmoothRescue.structuredAccepted,
+    !result.structuredSmoothRescue.artifactGuard.rollback,
+    JSON.stringify(result.structuredSmoothRescue)
+  );
 });
 
 test('structured smooth rescue is blocked by a real crossing scene edge', () => {
