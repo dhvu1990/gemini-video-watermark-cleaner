@@ -3,6 +3,7 @@ import { measurePostCleanupResidual } from './edgeBridge.js';
 import { measureStructuredRingResidual } from './structuredRingSuppress.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
 import { applyProtectedResidualRescue } from './protectedResidualRescue.js';
+import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
   const n = Number(value);
@@ -75,6 +76,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
   let improvement = 0;
   let alignedImprovement = 0;
   let candidateSmoothBackground = null;
+  let artifactGuard = null;
   const maxChromaIncrease = finite(options.maxChromaIncrease, 0.75);
 
   if (gate.eligible) {
@@ -107,13 +109,22 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     candidateSmoothBackground = candidate.smoothBackground || null;
     const detailAccepted = candidate.smoothBackground?.accepted !== false
       && candidate.smoothBackground?.detailPreservation?.accepted !== false;
-
-    structuredAccepted = detailAccepted
+    const metricsAccepted = detailAccepted
       && alignedImprovement >= finite(options.minAlignedImprovement, 0.12)
       && structuredCandidateAligned.score <= beforeAligned.score * finite(options.maxAlignedRatio, 0.88)
       && structuredCandidateGlobal.total <= beforeGlobal.total * finite(options.maxTotalRatio, 0.992) + 0.02
       && structuredCandidateGlobal.luma <= beforeGlobal.luma * finite(options.maxLumaRatio, 0.995) + 0.03
       && structuredCandidateGlobal.chroma <= beforeGlobal.chroma * finite(options.maxChromaRatio, 1.01) + maxChromaIncrease;
+
+    if (metricsAccepted) {
+      artifactGuard = evaluateSmoothRebuildArtifactGuard(
+        image,
+        candidateImage,
+        alphaMap,
+        options.artifactGuardOptions || {}
+      );
+      structuredAccepted = !artifactGuard.rollback;
+    }
 
     if (structuredAccepted) selected = candidateImage;
   }
@@ -164,6 +175,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       candidateAlignedImprovement: alignedImprovement,
       maxChromaIncrease,
       smoothBackground: candidateSmoothBackground,
+      artifactGuard,
       finalVisualResidual
     }
   };
