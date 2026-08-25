@@ -20,5 +20,7 @@ jobs:
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
       - run: npm run check
+      - name: Diagnose structured smooth rescue tests
+        run: node --test tests/structuredSmoothRescue.test.mjs
       - run: npm test
       - run: npm run build
