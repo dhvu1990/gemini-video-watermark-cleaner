@@ -1,5 +1,5 @@
 import { measurePostCleanupResidual } from './edgeBridge.js';
-import { sceneEdgeProtectionAt } from './sceneEdgeProtection.js';
+import { measureCrossingSceneEdgeRisk, sceneEdgeProtectionAt } from './sceneEdgeProtection.js';
 import { measureGeometricOutlineResidual, measureProtectedResidualField } from './protectedResidualRescue.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
@@ -107,19 +107,27 @@ function eligibility(image, alphaMap, options = {}) {
     outlineResidualHard: options.residualHard ?? 3.8
   });
   const body = measureProtectedResidualField(image, alphaMap, options);
+  const crossingSceneEdge = measureCrossingSceneEdgeRisk(image, alphaMap, options.sceneEdgeOptions || {});
   const sectorSafe = outline.sectorSupport >= (options.minSectorSupport ?? 3);
   const strongOutline = outline.score >= (options.minOutlineScore ?? 1.15)
     && outline.candidateDensity >= (options.minOutlineDensity ?? 0.075)
     && outline.samples >= (options.minOutlineSamples ?? 12);
   const bodyWeak = residualBodyWeak(body, outline, options);
   const guardedRatio = outline.contourPixels > 0 ? outline.sceneGuarded / outline.contourPixels : 1;
-  const sceneSafe = guardedRatio <= (options.maxSceneGuardedRatio ?? 0.34);
+  const contourSceneSafe = guardedRatio <= (options.maxSceneGuardedRatio ?? 0.34);
+  const crossingSceneSafe = !crossingSceneEdge.protect
+    && crossingSceneEdge.level !== 'high'
+    && Number(crossingSceneEdge.score ?? 1) <= (options.maxCrossingSceneEdgeScore ?? 0.30);
+  const sceneSafe = contourSceneSafe && crossingSceneSafe;
   return {
     eligible: options.enabled !== false && strongOutline && sectorSafe && bodyWeak && sceneSafe,
     strongOutline,
     sectorSafe,
     bodyWeak,
     sceneSafe,
+    contourSceneSafe,
+    crossingSceneSafe,
+    crossingSceneEdge,
     guardedRatio,
     outline,
     body
