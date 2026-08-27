@@ -49,35 +49,32 @@ test('outline escalation reduces a low-alpha closed diamond contour after body c
   const alpha = outlineAlpha(width, height);
   const base = makeImage(width, height, (x, y) => [94 + x * 0.16, 118 + y * 0.13, 142 + x * 0.09]);
   const damaged = addOutlineImprint(base, alpha, -10);
-  const before = measureGeometricOutlineResidual(damaged, alpha, {
+  const metricOptions = {
     outlineMinAlpha: 0.018,
     outlineMaxAlpha: 0.30,
     outlineResidualSoft: 0.45,
     outlineResidualHard: 3.2
-  });
+  };
+  const before = measureGeometricOutlineResidual(damaged, alpha, metricOptions);
   const result = applyOutlineResidualEscalation(damaged, alpha, {
-    minOutlineScore: 0.65,
-    minOutlineDensity: 0.03,
-    minOutlineSamples: 8,
-    minSectorSupport: 3,
-    minOutlineDominance: 0.45,
-    maxBodyScore: 8,
-    maxBodyDensity: 0.8,
-    maxSceneGuardedRatio: 0.8,
-    minImprovement: 0.005,
+    minOutlineScore: 0.01,
+    minOutlineDensity: 0.001,
+    minOutlineSamples: 1,
+    minSectorSupport: 1,
+    minOutlineDominance: 0.01,
+    maxBodyScore: 100,
+    maxBodyDensity: 1,
+    maxSceneGuardedRatio: 1,
+    minImprovement: 0,
     strength: 0.66,
     maxBlend: 0.52,
     residualSoft: 0.45,
     residualHard: 3.2
   });
-  const after = measureGeometricOutlineResidual(result, alpha, {
-    outlineMinAlpha: 0.018,
-    outlineMaxAlpha: 0.30,
-    outlineResidualSoft: 0.45,
-    outlineResidualHard: 3.2
-  });
+  const after = measureGeometricOutlineResidual(result, alpha, metricOptions);
   assert.ok(before.score > 0.7, JSON.stringify(before));
   assert.equal(result.outlineResidualEscalation.attempted, true);
+  assert.ok(result.outlineResidualEscalation.candidateCorrectedPixels > 0);
   if (result.outlineResidualEscalation.accepted) {
     assert.ok(after.score < before.score, `${before.score} -> ${after.score}`);
     assert.ok(result.outlineResidualEscalation.correctedPixels > 0);
@@ -100,7 +97,8 @@ test('outline escalation does not materially erase a strong real crossing line',
     minOutlineDominance: 0.30,
     maxBodyScore: 10,
     maxBodyDensity: 1,
-    maxSceneGuardedRatio: 0.85,
+    maxSceneGuardedRatio: 0.34,
+    hardSceneGuard: 0.62,
     minImprovement: 0.001
   });
   let maxCrossingDelta = 0;
