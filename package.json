@@ -1,9 +1,9 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.102",
+  "version": "1.0.103",
   "private": true,
   "type": "module",
-  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with final visual residual verification, guarded shape-targeted rescue, structured-to-smooth residual recovery, explicit faint-detection diagnostics, low-gain opacity fitting, scene-edge protection, dark underflow prevention and residual-aware cleanup.",
+  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with protected geometric-outline residual rescue, final visual residual verification, guarded shape-targeted recovery, scene-edge protection and artifact-safe cleanup.",
   "scripts": {
     "setup:alpha": "node scripts/sync-alpha-assets.mjs",
     "dev": "vite",

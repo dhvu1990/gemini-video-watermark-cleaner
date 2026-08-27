@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProtectedResidualRescue, measureProtectedResidualField } from '../src/video/protectedResidualRescue.js';
+import { applyProtectedResidualRescue, measureGeometricOutlineResidual, measureProtectedResidualField } from '../src/video/protectedResidualRescue.js';
 
 function image(width, height, fn) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -32,6 +32,40 @@ test('protected rescue reduces a broad diamond tone imprint on a smooth structur
   assert.ok(before.score > 1, JSON.stringify(before));
   assert.equal(result.protectedResidualRescue.attempted, true);
   if (result.protectedResidualRescue.accepted) assert.ok(after.score < before.score, `${before.score} -> ${after.score}`);
+});
+
+test('geometric outline rescue detects and reduces a closed low-alpha diamond contour', () => {
+  const width = 81, height = 81; const alpha = diamondAlpha(width, height);
+  const base = image(width, height, (x, y) => [92 + x * 0.14, 118 + y * 0.10, 138 + x * 0.07]);
+  const damaged = { width, height, data: new Uint8ClampedArray(base.data) };
+  const cx = (width - 1) / 2; const cy = (height - 1) / 2;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const d = Math.abs(x - cx) + Math.abs(y - cy);
+    if (d < 15 || d > 18) continue;
+    const p = y * width + x;
+    if (alpha[p] < 0.05 || alpha[p] > 0.30) continue;
+    const i = p * 4;
+    damaged.data[i] -= 6; damaged.data[i + 1] -= 6; damaged.data[i + 2] -= 6;
+  }
+  const before = measureGeometricOutlineResidual(damaged, alpha);
+  const result = applyProtectedResidualRescue(damaged, alpha, {
+    minScore: 99,
+    outlineMinScore: 0.7,
+    outlineMinDensity: 0.04,
+    outlineMinSamples: 8,
+    outlineMinSectorSupport: 3,
+    outlineMinImprovement: 0.005,
+    strength: 0.52,
+    maxBlend: 0.44
+  });
+  const after = measureGeometricOutlineResidual(result, alpha);
+  assert.ok(before.score > 0.7, JSON.stringify(before));
+  assert.ok(before.sectorSupport >= 3, JSON.stringify(before));
+  assert.equal(result.protectedResidualRescue.outlineTrigger, true);
+  assert.equal(result.protectedResidualRescue.attempted, true);
+  assert.equal(result.protectedResidualRescue.accepted, true, JSON.stringify(result.protectedResidualRescue));
+  assert.ok(after.score < before.score, `${before.score} -> ${after.score}`);
+  assert.ok(result.protectedResidualRescue.outlinePixels > 0);
 });
 
 test('protected rescue guards a strong real line crossing the footprint', () => {
