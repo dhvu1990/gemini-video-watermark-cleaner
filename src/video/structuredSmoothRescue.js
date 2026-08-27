@@ -3,6 +3,7 @@ import { measurePostCleanupResidual } from './edgeBridge.js';
 import { measureStructuredRingResidual } from './structuredRingSuppress.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
 import { applyProtectedResidualRescue } from './protectedResidualRescue.js';
+import { applyOutlineResidualEscalation } from './outlineResidualEscalation.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
@@ -52,9 +53,6 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
 
 function finalResidualOptions(options = {}) {
   return {
-    // Keep the final visual rescue conservative by default. The protected-residual
-    // module can still be tuned explicitly for known residual fixtures, but the
-    // runtime path must not reinterpret ordinary texture as a watermark imprint.
     minScore: finite(options.finalResidualMinScore, 1.55),
     minDensity: finite(options.finalResidualMinDensity, 0.16),
     minSamples: Math.max(8, Math.round(finite(options.finalResidualMinSamples, 18))),
@@ -64,6 +62,26 @@ function finalResidualOptions(options = {}) {
     maxLumaDelta: finite(options.finalResidualMaxLumaDelta, 10),
     hardSceneGuard: finite(options.finalResidualHardSceneGuard, 0.66),
     ...(options.finalResidualOptions || {})
+  };
+}
+
+function outlineEscalationOptions(options = {}) {
+  return {
+    enabled: options.outlineEscalationEnabled !== false,
+    minOutlineScore: finite(options.outlineEscalationMinScore, 1.15),
+    minOutlineDensity: finite(options.outlineEscalationMinDensity, 0.075),
+    minOutlineSamples: Math.max(8, Math.round(finite(options.outlineEscalationMinSamples, 12))),
+    minSectorSupport: Math.max(3, Math.round(finite(options.outlineEscalationMinSectorSupport, 3))),
+    minOutlineDominance: finite(options.outlineEscalationMinDominance, 0.82),
+    maxBodyScore: finite(options.outlineEscalationMaxBodyScore, 2.35),
+    maxBodyDensity: finite(options.outlineEscalationMaxBodyDensity, 0.38),
+    maxSceneGuardedRatio: finite(options.outlineEscalationMaxSceneGuardedRatio, 0.34),
+    strength: finite(options.outlineEscalationStrength, 0.58),
+    maxBlend: finite(options.outlineEscalationMaxBlend, 0.48),
+    maxLumaDelta: finite(options.outlineEscalationMaxLumaDelta, 11),
+    hardSceneGuard: finite(options.outlineEscalationHardSceneGuard, 0.62),
+    minImprovement: finite(options.outlineEscalationMinImprovement, 0.035),
+    ...(options.outlineEscalationOptions || {})
   };
 }
 
@@ -142,10 +160,31 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  const accepted = structuredAccepted || finalAccepted;
-  const acceptedMode = finalAccepted
-    ? (structuredAccepted ? 'structured-smooth+final-visual' : 'final-visual-residual-rescue')
-    : (structuredAccepted ? 'structured-smooth-rescue' : 'none');
+  let outlineResidualEscalation = null;
+  let outlineEscalationAccepted = false;
+  if (!finalAccepted) {
+    const escalated = applyOutlineResidualEscalation(selected, alphaMap, outlineEscalationOptions(options));
+    outlineResidualEscalation = escalated.outlineResidualEscalation || null;
+    outlineEscalationAccepted = Boolean(outlineResidualEscalation?.accepted);
+    if (outlineEscalationAccepted) {
+      selected = {
+        width: escalated.width,
+        height: escalated.height,
+        data: new Uint8ClampedArray(escalated.data)
+      };
+    }
+  }
+
+  const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted;
+  let acceptedMode = 'none';
+  if (outlineEscalationAccepted) {
+    acceptedMode = structuredAccepted ? 'structured-smooth+outline-escalation' : 'outline-residual-escalation';
+  } else if (finalAccepted) {
+    acceptedMode = structuredAccepted ? 'structured-smooth+final-visual' : 'final-visual-residual-rescue';
+  } else if (structuredAccepted) {
+    acceptedMode = 'structured-smooth-rescue';
+  }
+
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
 
@@ -155,13 +194,14 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     data: selected.data,
     structuredSmoothRescue: {
       enabled: options.enabled !== false,
-      attempted: structuredAttempted || Boolean(finalVisualResidual?.attempted),
+      attempted: structuredAttempted || Boolean(finalVisualResidual?.attempted) || Boolean(outlineResidualEscalation?.attempted),
       accepted,
       acceptedMode,
       structuredAttempted,
       structuredMetricsAccepted,
       structuredAccepted,
       finalVisualAccepted: finalAccepted,
+      outlineEscalationAccepted,
       ...gate,
       beforeGlobal,
       afterGlobal: finalGlobal,
@@ -176,7 +216,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       maxChromaIncrease,
       smoothBackground: candidateSmoothBackground,
       artifactGuard,
-      finalVisualResidual
+      finalVisualResidual,
+      outlineResidualEscalation
     }
   };
 }
