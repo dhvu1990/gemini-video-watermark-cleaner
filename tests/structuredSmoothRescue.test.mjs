@@ -74,6 +74,11 @@ function rescueOptions(extra = {}) {
   };
 }
 
+function pixelLuma(image, x, y) {
+  const i = (y * image.width + x) * 4;
+  return 0.2126 * image.data[i] + 0.7152 * image.data[i + 1] + 0.0722 * image.data[i + 2];
+}
+
 test('structured smooth rescue evaluates a watermark-shaped candidate with the guard disabled', () => {
   const { alpha, base, image } = flatResidualFixture();
   const result = applyStructuredSmoothRescue(
@@ -111,6 +116,29 @@ test('structured smooth rescue honors both metric gates and the artifact guard d
   );
 });
 
+test('accepted final visual rescue still runs post-chain outline verification', () => {
+  const { alpha, base, image } = flatResidualFixture();
+  const result = applyStructuredSmoothRescue(
+    image,
+    alpha,
+    smoothAnalysis(base),
+    { alignedBefore: { score: 4 }, alignedAfter: { score: 3.9 } },
+    rescueOptions({
+      enabled: false,
+      finalResidualMinScore: 0.01,
+      finalResidualMinDensity: 0.001,
+      finalResidualMinSamples: 8,
+      finalResidualMinImprovement: 0.001
+    })
+  );
+  const rescue = result.structuredSmoothRescue;
+  assert.equal(rescue.finalVisualAccepted, true, JSON.stringify(rescue.finalVisualResidual));
+  assert.ok(rescue.outlineResidualEscalation, JSON.stringify(rescue));
+  assert.equal(typeof rescue.outlineResidualEscalation.eligible, 'boolean');
+  assert.ok(rescue.postChainOutlineResidual, JSON.stringify(rescue));
+  assert.equal(typeof rescue.postChainOutlineResidual.strong, 'boolean');
+});
+
 test('structured smooth rescue is blocked by a real crossing scene edge', () => {
   const width = 72, height = 72;
   const alpha = diamondAlpha(width, height);
@@ -124,4 +152,43 @@ test('structured smooth rescue is blocked by a real crossing scene edge', () => 
   );
   assert.equal(gate.sceneSafe, false, JSON.stringify(gate.sceneEdge));
   assert.equal(gate.eligible, false, JSON.stringify(gate));
+});
+
+test('post-chain outline verification keeps a crossing scene line protected', () => {
+  const width = 72, height = 72;
+  const alpha = diamondAlpha(width, height);
+  const image = makeImage(width, height, (x, y) => {
+    const crossing = Math.abs(y - (0.48 * x + 18)) <= 1.25;
+    return crossing ? [32, 36, 42] : [108 + x * 0.08, 126 + y * 0.08, 146 + x * 0.04];
+  });
+  const result = applyStructuredSmoothRescue(
+    image,
+    alpha,
+    {},
+    {},
+    {
+      enabled: false,
+      finalResidualOptions: { enabled: false },
+      outlineEscalationOptions: {
+        minOutlineScore: 0.01,
+        minOutlineDensity: 0.001,
+        minOutlineSamples: 8,
+        minSectorSupport: 3,
+        minOutlineDominance: 0.01,
+        maxBodyScore: 100,
+        maxBodyDensity: 1,
+        minImprovement: 0
+      }
+    }
+  );
+  const outline = result.structuredSmoothRescue.outlineResidualEscalation;
+  assert.ok(outline, JSON.stringify(result.structuredSmoothRescue));
+  assert.equal(outline.sceneSafe, false, JSON.stringify(outline.crossingSceneEdge));
+  assert.equal(outline.accepted, false, JSON.stringify(outline));
+  let maxCrossingDelta = 0;
+  for (let x = 20; x <= 52; x++) {
+    const y = Math.round(0.48 * x + 18);
+    maxCrossingDelta = Math.max(maxCrossingDelta, Math.abs(pixelLuma(result, x, y) - pixelLuma(image, x, y)));
+  }
+  assert.ok(maxCrossingDelta <= 0.5, `crossing-line luma delta=${maxCrossingDelta}`);
 });
