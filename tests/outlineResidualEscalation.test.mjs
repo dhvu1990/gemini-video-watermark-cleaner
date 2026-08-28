@@ -39,6 +39,18 @@ function addOutlineImprint(image, alpha, amount = -9) {
   return out;
 }
 
+function addOuterOutlineImprint(image, alpha, amount = -14) {
+  const out = { width: image.width, height: image.height, data: new Uint8ClampedArray(image.data) };
+  for (let p = 0; p < alpha.length; p++) {
+    if (alpha[p] < 0.02 || alpha[p] > 0.04) continue;
+    const i = p * 4;
+    out.data[i] = Math.max(0, Math.min(255, out.data[i] + amount));
+    out.data[i + 1] = Math.max(0, Math.min(255, out.data[i + 1] + amount));
+    out.data[i + 2] = Math.max(0, Math.min(255, out.data[i + 2] + amount));
+  }
+  return out;
+}
+
 function pixelLuma(image, x, y) {
   const i = (y * image.width + x) * 4;
   return 0.2126 * image.data[i] + 0.7152 * image.data[i + 1] + 0.0722 * image.data[i + 2];
@@ -79,6 +91,28 @@ test('outline escalation reduces a low-alpha closed diamond contour after body c
     assert.ok(after.score < before.score, `${before.score} -> ${after.score}`);
     assert.ok(result.outlineResidualEscalation.correctedPixels > 0);
   }
+});
+
+test('production outline defaults accept a thin outer diamond residual on a smooth scene', () => {
+  const width = 81, height = 81;
+  const alpha = outlineAlpha(width, height);
+  const base = makeImage(width, height, (x, y) => [92 + x * 0.10, 116 + y * 0.08, 138 + x * 0.05]);
+  const damaged = addOuterOutlineImprint(base, alpha, -14);
+  const before = measureGeometricOutlineResidual(damaged, alpha, {
+    outlineMinAlpha: 0.018,
+    outlineMaxAlpha: 0.30,
+    outlineResidualSoft: 0.55,
+    outlineResidualHard: 3.8
+  });
+  const result = applyOutlineResidualEscalation(damaged, alpha);
+  const rescue = result.outlineResidualEscalation;
+  assert.equal(rescue.strongOutline, true, JSON.stringify(rescue));
+  assert.equal(rescue.bodyWeak, true, JSON.stringify(rescue));
+  assert.equal(rescue.sceneSafe, true, JSON.stringify(rescue));
+  assert.equal(rescue.attempted, true, JSON.stringify(rescue));
+  assert.equal(rescue.accepted, true, JSON.stringify(rescue));
+  assert.ok(rescue.correctedPixels > 0, JSON.stringify(rescue));
+  assert.ok(rescue.afterOutline.score < before.score, `${before.score} -> ${rescue.afterOutline.score}`);
 });
 
 test('outline escalation does not materially erase a strong real crossing line', () => {
