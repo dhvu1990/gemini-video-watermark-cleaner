@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { getVideoAlphaMap, setActiveAlphaCalibration } from '../src/video/alpha.js';
 import {
   baseAlphaProfileForSize,
   normalizeDetectedAlphaMap,
@@ -26,9 +27,18 @@ test('invalid detected alpha geometry and values are rejected', () => {
   assert.equal(normalizeDetectedAlphaMap(outOfRange, 4, 4), null);
 });
 
-test('base fallback profile is explicit and independent of active calibration state', () => {
+test('base fallback profile is explicit and independent of active calibration state', async () => {
   assert.equal(baseAlphaProfileForSize(32), '48');
   assert.equal(baseAlphaProfileForSize(72), '96-20260520');
+
+  const poisoned = new Float32Array(72 * 72).fill(0.777);
+  setActiveAlphaCalibration(72, poisoned, { source: 'other-batch-item' });
+  const auto = await getVideoAlphaMap(72);
+  assert.ok(Math.abs(auto[0] - 0.777) < 1e-5);
+
+  const explicit = await getVideoAlphaMap(72, baseAlphaProfileForSize(72), 0);
+  assert.equal(explicit.length, 72 * 72);
+  assert.ok(Array.from(explicit).some((value) => Math.abs(value - 0.777) > 0.1));
 });
 
 test('default UI gain reuses detector calibration while explicit operator gain wins', () => {
