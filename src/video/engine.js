@@ -12,6 +12,7 @@ import {
 } from 'mediabunny';
 import { detectVideoWatermarkFromFrames, estimateAlphaGain, scoreRegion } from './detect.js';
 import { getVideoAlphaMap } from './alpha.js';
+import { baseAlphaProfileForSize, normalizeDetectedAlphaMap } from './detectionProfileReuse.js';
 import { applyEdgePolish, inverseAlphaRestore, stabilizeCorrection, toImageDataLike } from './restore.js';
 import {
   applyPaddedTextureRepair,
@@ -322,7 +323,26 @@ export async function cleanVideo(file, options = {}) {
   if (position.x < 0 || position.y < 0 || position.x + position.width > metadata.width || position.y + position.height > metadata.height) {
     input.dispose(); throw new Error('Watermark region is outside the video frame');
   }
-  const alphaMap = manual || detectedRegion ? await getVideoAlphaMap(position.width) : analysis.internalDetection.alphaMap;
+
+  let alphaMap;
+  let alphaMapSource;
+  if (manual) {
+    alphaMap = await getVideoAlphaMap(position.width, baseAlphaProfileForSize(position.width), 0);
+    alphaMapSource = 'manual-base-profile';
+  } else if (detectedRegion) {
+    const detectedAlphaMap = normalizeDetectedAlphaMap(options.detectedAlphaMap, position.width, position.height);
+    if (detectedAlphaMap) {
+      alphaMap = detectedAlphaMap;
+      alphaMapSource = 'cached-detection';
+    } else {
+      alphaMap = await getVideoAlphaMap(position.width, baseAlphaProfileForSize(position.width), 0);
+      alphaMapSource = options.detectedAlphaMap ? 'invalid-cached-fallback' : 'base-profile-fallback';
+    }
+  } else {
+    alphaMap = new Float32Array(analysis.internalDetection.alphaMap);
+    alphaMapSource = 'fresh-detection';
+  }
+
   const requestedGain = Number.isFinite(options.alphaGain) ? options.alphaGain : (analysis?.internalDetection.alphaGain ?? 1);
   const expanded = expandedRegion(position, metadata.width, metadata.height, REPAIR_PADDING);
   const inner = { offsetX: expanded.offsetX, offsetY: expanded.offsetY, width: position.width, height: position.height };
@@ -406,11 +426,12 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.20', position, alphaGain: previousGain, processedFrames, skippedFrames, audio: audioResult,
+        version: '1.0.20', position, alphaGain: previousGain, alphaMapSource, processedFrames, skippedFrames, audio: audioResult,
         repair: {
           padding: REPAIR_PADDING, paddedTexture: true, multiFrameAtlas: options.temporalStabilize !== false,
           hybridCoreRing: true, normalEdgeBridge: true, microEdgeFinish: true, quadrantChromaFinish: true,
           dualRingLumaFinish: true, subpixelAlphaRegistration: true,
+          alphaMapSource,
           bridgeFrames, bridgePixelsPeak, atlasFrames, atlasDonorsPeak, historyLimit: MAX_ATLAS_HISTORY,
           temporalDonorAcceptance: true,
           temporalDonorAttemptedFrames, temporalDonorAcceptedFrames, temporalDonorRejectedFrames,
