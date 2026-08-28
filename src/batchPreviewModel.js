@@ -17,6 +17,10 @@ export function batchBackgroundLabel(preview = null) {
   const rescueMode = preview?.structuredSmoothRescue?.acceptedMode || null;
   if (rescueMode === 'final-visual-residual-rescue') return 'Final visual residual rescue';
   if (rescueMode === 'structured-smooth+final-visual') return 'Structured smooth + final visual rescue';
+  if (rescueMode === 'outline-residual-escalation') return 'Outline residual escalation';
+  if (rescueMode === 'structured-smooth+outline-escalation') return 'Structured smooth + outline escalation';
+  if (rescueMode === 'final-visual+outline-escalation') return 'Final visual + outline escalation';
+  if (rescueMode === 'structured-smooth+final-visual+outline-escalation') return 'Structured smooth + final visual + outline escalation';
   if (rescueMode === 'structured-smooth-rescue') return 'Structured smooth residual rescue';
   const mode = preview?.dualRingFinish?.smoothBackground?.mode || null;
   if (mode === 'empty-hard-rebuild') return 'Safe empty-zone hard suppression';
@@ -36,6 +40,27 @@ function finalVisualRiskFlags(preview = null) {
   const flags = [];
   if (finalResidual.attempted && !finalResidual.accepted) flags.push('final-residual-rescue-rejected');
   if (score >= 1.20 && density >= 0.07 && samples >= 10) flags.push('final-visual-watermark-residual');
+  return flags;
+}
+
+function outlineResidualRiskFlags(preview = null) {
+  const rescue = preview?.structuredSmoothRescue || null;
+  if (!rescue) return [];
+  const escalation = rescue.outlineResidualEscalation || null;
+  const post = rescue.postChainOutlineResidual || null;
+  const flags = [];
+  if (escalation?.attempted && !escalation.accepted) flags.push('outline-residual-escalation-rejected');
+  if (!post) return flags;
+
+  const score = Math.max(0, finite(post.score, 0));
+  const density = Math.max(0, finite(post.candidateDensity, 0));
+  const samples = Math.max(0, Math.round(finite(post.samples, 0)));
+  const sectors = Math.max(0, Math.round(finite(post.sectorSupport, 0)));
+  const strong = post.strong === true || (score >= 1.15 && density >= 0.075 && samples >= 12 && sectors >= 3);
+  if (!strong) return flags;
+
+  const sceneSafe = rescue.postChainOutlineSceneSafe !== false && escalation?.sceneSafe !== false;
+  flags.push(sceneSafe ? 'post-chain-outline-watermark-residual' : 'post-chain-outline-scene-protected');
   return flags;
 }
 
@@ -69,7 +94,11 @@ export function buildBatchDetectionView(detection = null, preview = null) {
   const existingFlags = Array.isArray(preview?.antiStreak?.riskFlags)
     ? preview.antiStreak.riskFlags.filter(Boolean)
     : [];
-  const flags = [...new Set([...existingFlags, ...finalVisualRiskFlags(preview)])];
+  const flags = [...new Set([
+    ...existingFlags,
+    ...finalVisualRiskFlags(preview),
+    ...outlineResidualRiskFlags(preview)
+  ])];
 
   return {
     ready: true,
