@@ -75,7 +75,7 @@ test('worker caches inspect calibration and activates it before the detected-reg
   const worker = fs.readFileSync(new URL('../src/video/worker.js', import.meta.url), 'utf8');
   const engine = fs.readFileSync(new URL('../src/video/engine.js', import.meta.url), 'utf8');
   assert.match(worker, /cacheInspectionCalibration\(message\.file, result\)/);
-  assert.match(worker, /ensureExportCalibration\(message\.file, message\.options \|\| \{\}, progress\)/);
+  assert.match(worker, /ensureExportCalibration\(message\.file, message\.options \|\| \{\}, progress\)[\s\S]*resetAdaptiveFinishState\(\)[\s\S]*activateExportCalibration/);
   assert.match(worker, /setActiveAlphaCalibration\(size, calibration\.alphaMap/);
   assert.match(worker, /selectExportAlphaGain\(options\?\.alphaGain, calibration\.alphaGain, 1\)/);
   assert.match(worker, /finally \{\s*\/\/ Never let one same-sized video's refined alpha leak[\s\S]*clearActiveAlphaCalibration\(\)/);
