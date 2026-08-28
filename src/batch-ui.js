@@ -5,6 +5,7 @@ import {
   shouldRetryBatchWorkerError
 } from './batchWorkerReliability.js';
 import { buildBatchDetectionView, sameBatchInspectOptions } from './batchPreviewModel.js';
+import { resolveDetectedAlphaGain } from './video/detectionProfileReuse.js';
 
 const ids = ['batchInput','chooseBatchBtn','batchQueue','batchSummary','batchCleanAllBtn','batchCancelBtn','batchOutputFolderBtn','batchOutputFolderName','batchNameMode'];
 const els = Object.fromEntries(ids.map((id) => [id, document.getElementById(id)]));
@@ -28,14 +29,16 @@ function settingChecked(id, fallback = false) {
   const element = document.getElementById(id);
   return element ? Boolean(element.checked) : fallback;
 }
-function processOptions(detection) {
+function processOptions(detection, detectedAlphaMap = null) {
   const position = detection?.position;
   const detectedRegion = position ? { x: position.x, y: position.y, size: position.width } : null;
+  const configuredGain = settingNumber('alphaGain', 1);
   return {
     sampleCount: settingNumber('sampleCount', 12),
     minConfidence: settingNumber('minConfidence', 0.12),
     detectedRegion,
-    alphaGain: settingNumber('alphaGain', 1),
+    detectedAlphaMap,
+    alphaGain: resolveDetectedAlphaGain(configuredGain, detection?.alphaGain, 1),
     adaptiveAlpha: settingChecked('adaptiveAlpha', true),
     temporalStabilize: settingChecked('temporalStabilize', true),
     edgePolish: settingNumber('edgePolish', 0.35),
@@ -62,6 +65,7 @@ function makeItem(file) {
     phase: 'Waiting',
     error: '',
     detection: null,
+    detectionAlphaMap: null,
     preview: null,
     inspectOptions: null,
     autoDetectStatus: 'pending',
@@ -312,6 +316,7 @@ async function analyzeOnePreview(item, options) {
       render();
     });
     item.detection = inspected.result?.detection || null;
+    item.detectionAlphaMap = inspected.result?.internalDetection?.alphaMap || null;
     item.preview = inspected.result?.preview || null;
     item.inspectOptions = { ...options };
     item.autoDetectStatus = 'ready';
@@ -380,6 +385,7 @@ async function processOne(item) {
     item.phase = 'Detecting';
     const inspected = await runWorker('inspect', item.file, currentInspectOptions, (message) => { item.phase = message.status || 'Detecting'; item.progress = Math.min(0.28, 0.28 * (message.progress ?? 0)); render(); });
     item.detection = inspected.result?.detection || null;
+    item.detectionAlphaMap = inspected.result?.internalDetection?.alphaMap || null;
     item.preview = inspected.result?.preview || null;
     item.inspectOptions = { ...currentInspectOptions };
     item.autoDetectStatus = 'ready';
@@ -391,7 +397,7 @@ async function processOne(item) {
   const minConfidence = settingNumber('minConfidence', 0.12);
   if (!item.detection?.detected && !settingChecked('forceCleanup', false)) throw new Error(`Detection confidence ${(item.detection?.confidence ?? 0).toFixed(3)} is below ${minConfidence.toFixed(3)}`);
   item.phase = 'Cleaning'; item.progress = 0.30; render();
-  const processed = await runWorker('process', item.file, processOptions(item.detection), (message) => { item.phase = message.status || 'Cleaning'; item.progress = 0.30 + 0.68 * Math.max(0, Math.min(1, message.progress ?? 0)); render(); });
+  const processed = await runWorker('process', item.file, processOptions(item.detection, item.detectionAlphaMap), (message) => { item.phase = message.status || 'Cleaning'; item.progress = 0.30 + 0.68 * Math.max(0, Math.min(1, message.progress ?? 0)); render(); });
   item.phase = state.outputDirectory ? 'Saving' : 'Ready'; item.progress = 0.99; render();
   await saveBlob(item, new Blob([processed.buffer], { type: 'video/mp4' }));
   item.progress = 1; item.phase = item.status === BATCH_STATUSES.SAVED ? 'Saved' : 'Ready'; render();
