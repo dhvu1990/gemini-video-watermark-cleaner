@@ -2,7 +2,10 @@ import { applySmoothBackgroundReconstruction } from './smoothBackground.js';
 import { measurePostCleanupResidual } from './edgeBridge.js';
 import { measureStructuredRingResidual } from './structuredRingSuppress.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
-import { applyProtectedResidualRescue } from './protectedResidualRescue.js';
+import {
+  applyProtectedResidualRescue,
+  measureGeometricOutlineResidual
+} from './protectedResidualRescue.js';
 import { applyOutlineResidualEscalation } from './outlineResidualEscalation.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
@@ -85,6 +88,22 @@ function outlineEscalationOptions(options = {}) {
   };
 }
 
+function measurePostChainOutlineResidual(image, alphaMap, options = {}) {
+  const outlineOptions = outlineEscalationOptions(options);
+  const residual = measureGeometricOutlineResidual(image, alphaMap, {
+    ...outlineOptions,
+    outlineMinAlpha: outlineOptions.minAlpha ?? 0.018,
+    outlineMaxAlpha: outlineOptions.maxAlpha ?? 0.30,
+    outlineResidualSoft: outlineOptions.residualSoft ?? 0.55,
+    outlineResidualHard: outlineOptions.residualHard ?? 3.8
+  });
+  const strong = residual.score >= outlineOptions.minOutlineScore
+    && residual.candidateDensity >= outlineOptions.minOutlineDensity
+    && residual.samples >= outlineOptions.minOutlineSamples
+    && residual.sectorSupport >= outlineOptions.minSectorSupport;
+  return { ...residual, strong };
+}
+
 export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}, structuredRing = {}, options = {}) {
   const gate = evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoothAnalysis, structuredRing, options);
   const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
@@ -160,25 +179,29 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  let outlineResidualEscalation = null;
-  let outlineEscalationAccepted = false;
-  if (!finalAccepted) {
-    const escalated = applyOutlineResidualEscalation(selected, alphaMap, outlineEscalationOptions(options));
-    outlineResidualEscalation = escalated.outlineResidualEscalation || null;
-    outlineEscalationAccepted = Boolean(outlineResidualEscalation?.accepted);
-    if (outlineEscalationAccepted) {
-      selected = {
-        width: escalated.width,
-        height: escalated.height,
-        data: new Uint8ClampedArray(escalated.data)
-      };
-    }
+  // Always verify the selected image after the final visual-residual stage. In
+  // v1.0.104 an accepted broad/final rescue short-circuited this pass, so a
+  // thin low-alpha diamond contour could remain visible while the result was
+  // already considered accepted. The outline pass still owns its strong-outline,
+  // weak-body, multi-sector, crossing-scene-edge and rollback gates.
+  const escalated = applyOutlineResidualEscalation(selected, alphaMap, outlineEscalationOptions(options));
+  const outlineResidualEscalation = escalated.outlineResidualEscalation || null;
+  const outlineEscalationAccepted = Boolean(outlineResidualEscalation?.accepted);
+  if (outlineEscalationAccepted) {
+    selected = {
+      width: escalated.width,
+      height: escalated.height,
+      data: new Uint8ClampedArray(escalated.data)
+    };
   }
 
   const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted;
   let acceptedMode = 'none';
   if (outlineEscalationAccepted) {
-    acceptedMode = structuredAccepted ? 'structured-smooth+outline-escalation' : 'outline-residual-escalation';
+    if (structuredAccepted && finalAccepted) acceptedMode = 'structured-smooth+final-visual+outline-escalation';
+    else if (finalAccepted) acceptedMode = 'final-visual+outline-escalation';
+    else if (structuredAccepted) acceptedMode = 'structured-smooth+outline-escalation';
+    else acceptedMode = 'outline-residual-escalation';
   } else if (finalAccepted) {
     acceptedMode = structuredAccepted ? 'structured-smooth+final-visual' : 'final-visual-residual-rescue';
   } else if (structuredAccepted) {
@@ -187,6 +210,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
 
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
+  const postChainOutlineResidual = measurePostChainOutlineResidual(selected, alphaMap, options);
+  const postChainOutlineSceneSafe = outlineResidualEscalation?.sceneSafe !== false;
 
   return {
     width: selected.width,
@@ -217,7 +242,9 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       smoothBackground: candidateSmoothBackground,
       artifactGuard,
       finalVisualResidual,
-      outlineResidualEscalation
+      outlineResidualEscalation,
+      postChainOutlineResidual,
+      postChainOutlineSceneSafe
     }
   };
 }
