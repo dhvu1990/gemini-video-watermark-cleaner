@@ -107,12 +107,29 @@ test('production outline defaults accept a thin outer diamond residual on a smoo
   const result = applyOutlineResidualEscalation(damaged, alpha);
   const rescue = result.outlineResidualEscalation;
   assert.equal(rescue.strongOutline, true, JSON.stringify(rescue));
+  assert.equal(rescue.bodyDensityWeak, false, JSON.stringify(rescue));
+  assert.equal(rescue.bodyQuietOverride, true, JSON.stringify(rescue));
   assert.equal(rescue.bodyWeak, true, JSON.stringify(rescue));
   assert.equal(rescue.sceneSafe, true, JSON.stringify(rescue));
   assert.equal(rescue.attempted, true, JSON.stringify(rescue));
   assert.equal(rescue.accepted, true, JSON.stringify(rescue));
   assert.ok(rescue.correctedPixels > 0, JSON.stringify(rescue));
   assert.ok(rescue.afterOutline.score < before.score, `${before.score} -> ${rescue.afterOutline.score}`);
+});
+
+test('production outline defaults keep escalation closed when the body residual is materially strong', () => {
+  const width = 81, height = 81;
+  const alpha = outlineAlpha(width, height);
+  const base = makeImage(width, height, (x, y) => [96 + x * 0.10, 120 + y * 0.08, 142 + x * 0.05]);
+  const damaged = addOutlineImprint(base, alpha, -18);
+  const result = applyOutlineResidualEscalation(damaged, alpha);
+  const rescue = result.outlineResidualEscalation;
+  assert.equal(rescue.strongOutline, true, JSON.stringify(rescue));
+  assert.equal(rescue.bodyDensityWeak, false, JSON.stringify(rescue));
+  assert.equal(rescue.bodyQuietOverride, false, JSON.stringify(rescue));
+  assert.equal(rescue.bodyWeak, false, JSON.stringify(rescue));
+  assert.equal(rescue.attempted, false, JSON.stringify(rescue));
+  assert.equal(rescue.accepted, false, JSON.stringify(rescue));
 });
 
 test('outline escalation does not materially erase a strong real crossing line', () => {
