@@ -34,6 +34,8 @@ test('batch background labels mirror the main preview cleanup mode', () => {
   assert.equal(batchBackgroundLabel({ dualRingFinish: { smoothBackground: { mode: 'smooth-rebuild' } } }), 'Smooth background rebuild');
   assert.equal(batchBackgroundLabel({ dualRingFinish: { smoothBackground: { mode: 'empty-hard-rebuild' } } }), 'Safe empty-zone hard suppression');
   assert.equal(batchBackgroundLabel({ structuredSmoothRescue: { acceptedMode: 'final-visual-residual-rescue' } }), 'Final visual residual rescue');
+  assert.equal(batchBackgroundLabel({ structuredSmoothRescue: { acceptedMode: 'outline-residual-escalation' } }), 'Outline residual escalation');
+  assert.equal(batchBackgroundLabel({ structuredSmoothRescue: { acceptedMode: 'final-visual+outline-escalation' } }), 'Final visual + outline escalation');
   assert.equal(batchBackgroundLabel(null), 'Structured-background fallback');
 });
 
@@ -73,11 +75,76 @@ test('accepted final visual rescue is labeled without a stale residual warning',
         accepted: true,
         before: { score: 2.4, candidateDensity: 0.20, samples: 61 },
         after: { score: 0.7, candidateDensity: 0.08, samples: 21 }
-      }
+      },
+      postChainOutlineResidual: { score: 0.7, candidateDensity: 0.04, samples: 8, sectorSupport: 2, strong: false },
+      postChainOutlineSceneSafe: true
     }
   });
   assert.equal(view.note, 'Final visual residual rescue');
   assert.equal(view.riskFlags, 'none');
+});
+
+test('post-chain outline verifier flags a strong contour after an accepted final rescue', () => {
+  const view = buildBatchDetectionView({
+    detected: true,
+    confidence: 0.93,
+    candidateId: 'veo-portrait-1080-inset',
+    position: { x: 864, y: 1704, width: 72, height: 72 }
+  }, {
+    antiStreak: { riskFlags: [] },
+    structuredSmoothRescue: {
+      acceptedMode: 'final-visual-residual-rescue',
+      finalVisualResidual: {
+        attempted: true,
+        accepted: true,
+        before: { score: 2.3, candidateDensity: 0.18, samples: 52 },
+        after: { score: 0.72, candidateDensity: 0.06, samples: 17 }
+      },
+      outlineResidualEscalation: {
+        attempted: false,
+        accepted: false,
+        sceneSafe: true
+      },
+      postChainOutlineResidual: {
+        score: 1.62,
+        candidateDensity: 0.13,
+        samples: 34,
+        sectorSupport: 4,
+        strong: true
+      },
+      postChainOutlineSceneSafe: true
+    }
+  });
+  assert.match(view.riskFlags, /post-chain-outline-watermark-residual/);
+});
+
+test('post-chain outline verifier reports scene-protected structure instead of treating it as safe cleanup', () => {
+  const view = buildBatchDetectionView({
+    detected: true,
+    confidence: 0.74,
+    candidateId: 'veo-portrait-1080-inset',
+    position: { x: 864, y: 1704, width: 72, height: 72 }
+  }, {
+    antiStreak: { riskFlags: [] },
+    structuredSmoothRescue: {
+      acceptedMode: 'none',
+      outlineResidualEscalation: {
+        attempted: false,
+        accepted: false,
+        sceneSafe: false
+      },
+      postChainOutlineResidual: {
+        score: 1.55,
+        candidateDensity: 0.12,
+        samples: 31,
+        sectorSupport: 4,
+        strong: true
+      },
+      postChainOutlineSceneSafe: false
+    }
+  });
+  assert.match(view.riskFlags, /post-chain-outline-scene-protected/);
+  assert.doesNotMatch(view.riskFlags, /post-chain-outline-watermark-residual/);
 });
 
 test('cached batch inspect results are reused only while relevant inspect settings match', () => {
