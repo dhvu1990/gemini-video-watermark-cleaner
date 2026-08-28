@@ -40,6 +40,14 @@ export function getActiveAlphaCalibration(size) {
   return entry ? { alphaMap: new Float32Array(entry.alphaMap), metadata: entry.metadata ? { ...entry.metadata } : null } : null;
 }
 
+export function clearActiveAlphaCalibration(size = null) {
+  if (Number.isFinite(Number(size))) {
+    ACTIVE_CALIBRATION.delete(Math.max(16, Math.round(Number(size))));
+    return;
+  }
+  ACTIVE_CALIBRATION.clear();
+}
+
 export function buildProceduralFallbackAlpha(size = 96) {
   const out = new Float32Array(size * size);
   const center = (size - 1) / 2;
