@@ -92,10 +92,25 @@ function prediction(image, alphaMap, x, y, options = {}) {
 function residualBodyWeak(body, outline, options = {}) {
   const maxBodyScore = Number.isFinite(options.maxBodyScore) ? options.maxBodyScore : 2.35;
   const maxBodyDensity = Number.isFinite(options.maxBodyDensity) ? options.maxBodyDensity : 0.38;
+  const lowBodyScoreOverride = Number.isFinite(options.lowBodyScoreOverride) ? options.lowBodyScoreOverride : 0.50;
   const outlineDominance = outline.score / Math.max(0.35, body.score);
-  return body.score <= maxBodyScore
-    && body.candidateDensity <= maxBodyDensity
-    && outlineDominance >= (options.minOutlineDominance ?? 0.82);
+  const bodyScoreWeak = body.score <= maxBodyScore;
+  const bodyDensityWeak = body.candidateDensity <= maxBodyDensity;
+  // measureProtectedResidualField.candidateDensity is measurement coverage, not
+  // strictly the density of visibly damaged pixels. On a smooth field it can be
+  // near 1.0 even when the measured body residual itself is negligible. Allow
+  // that dense-but-quiet case only under a much tighter body-score ceiling.
+  const bodyQuietOverride = body.score <= lowBodyScoreOverride;
+  const dominanceSafe = outlineDominance >= (options.minOutlineDominance ?? 0.82);
+  return {
+    weak: bodyScoreWeak && (bodyDensityWeak || bodyQuietOverride) && dominanceSafe,
+    bodyScoreWeak,
+    bodyDensityWeak,
+    bodyQuietOverride,
+    lowBodyScoreOverride,
+    outlineDominance,
+    dominanceSafe
+  };
 }
 
 function eligibility(image, alphaMap, options = {}) {
@@ -112,7 +127,7 @@ function eligibility(image, alphaMap, options = {}) {
   const strongOutline = outline.score >= (options.minOutlineScore ?? 1.15)
     && outline.candidateDensity >= (options.minOutlineDensity ?? 0.075)
     && outline.samples >= (options.minOutlineSamples ?? 12);
-  const bodyWeak = residualBodyWeak(body, outline, options);
+  const bodyGate = residualBodyWeak(body, outline, options);
   const guardedRatio = outline.contourPixels > 0 ? outline.sceneGuarded / outline.contourPixels : 1;
   const contourSceneSafe = guardedRatio <= (options.maxSceneGuardedRatio ?? 0.34);
   const crossingSceneSafe = !crossingSceneEdge.protect
@@ -120,10 +135,16 @@ function eligibility(image, alphaMap, options = {}) {
     && Number(crossingSceneEdge.score ?? 1) <= (options.maxCrossingSceneEdgeScore ?? 0.30);
   const sceneSafe = contourSceneSafe && crossingSceneSafe;
   return {
-    eligible: options.enabled !== false && strongOutline && sectorSafe && bodyWeak && sceneSafe,
+    eligible: options.enabled !== false && strongOutline && sectorSafe && bodyGate.weak && sceneSafe,
     strongOutline,
     sectorSafe,
-    bodyWeak,
+    bodyWeak: bodyGate.weak,
+    bodyScoreWeak: bodyGate.bodyScoreWeak,
+    bodyDensityWeak: bodyGate.bodyDensityWeak,
+    bodyQuietOverride: bodyGate.bodyQuietOverride,
+    lowBodyScoreOverride: bodyGate.lowBodyScoreOverride,
+    outlineDominance: bodyGate.outlineDominance,
+    bodyDominanceSafe: bodyGate.dominanceSafe,
     sceneSafe,
     contourSceneSafe,
     crossingSceneSafe,
