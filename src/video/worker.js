@@ -97,6 +97,9 @@ self.onmessage = async (event) => {
       resetAdaptiveFinishState();
       const calibration = await ensureExportCalibration(message.file, message.options || {}, progress);
       if (cancelled) return self.postMessage({ type: 'cancelled', tag });
+      // A cache-miss refresh renders an inspect preview and may touch adaptive
+      // finishing state. Export must always start from a clean per-video state.
+      resetAdaptiveFinishState();
       const processOptions = activateExportCalibration(message.options || {}, calibration);
       let result;
       try {
