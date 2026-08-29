@@ -50,6 +50,39 @@ function finalVisualRiskFlags(preview = null) {
   return flags;
 }
 
+function rejectedOutlineAcceptanceFlags(escalation = null) {
+  if (!escalation?.attempted || escalation?.accepted) return [];
+  const flags = [];
+  const correctedPixels = Math.max(0, finite(escalation.candidateCorrectedPixels, 0));
+  const meanBlend = Math.max(0, finite(escalation.candidateMeanBlend, 0));
+  const improvement = finite(escalation.candidateImprovement, -Infinity);
+  const minImprovement = finite(escalation.minImprovement, 0.035);
+  const maxMeanBlend = finite(escalation.maxMeanBlend, 0.42);
+  const beforeOutline = escalation.beforeOutline || escalation.outline || {};
+  const afterOutline = escalation.candidateAfterOutline || {};
+  const beforeGlobal = escalation.beforeGlobal || {};
+  const afterGlobal = escalation.candidateAfterGlobal || {};
+  const maxOutlineRatio = finite(escalation.maxOutlineRatio, 0.965);
+
+  if (correctedPixels < 6) flags.push('outline-reject-too-few-pixels');
+  if (meanBlend > maxMeanBlend) flags.push('outline-reject-mean-blend');
+  if (improvement < minImprovement) flags.push('outline-reject-local-improvement');
+  if (finite(afterOutline.score, Infinity) > finite(beforeOutline.score, 0) * maxOutlineRatio) {
+    flags.push('outline-reject-outline-ratio');
+  }
+  if (finite(afterGlobal.total, Infinity) > finite(beforeGlobal.total, 0) * 1.005 + 0.05) {
+    flags.push('outline-reject-global-total');
+  }
+  if (finite(afterGlobal.luma, Infinity) > finite(beforeGlobal.luma, 0) * 1.008 + 0.05) {
+    flags.push('outline-reject-global-luma');
+  }
+  if (finite(afterGlobal.chroma, Infinity) > finite(beforeGlobal.chroma, 0) * 1.006 + 0.45) {
+    flags.push('outline-reject-global-chroma');
+  }
+  if (!flags.length) flags.push('outline-reject-unclassified');
+  return flags;
+}
+
 function outlineResidualRiskFlags(preview = null) {
   const rescue = preview?.structuredSmoothRescue || null;
   if (!rescue) return [];
@@ -59,7 +92,10 @@ function outlineResidualRiskFlags(preview = null) {
 
   if (escalation?.partialSceneProtected) flags.push('outline-partial-scene-protection');
   if (escalation?.contourBodyOverride) flags.push('outline-contour-body-override');
-  if (escalation?.attempted && !escalation.accepted) flags.push('outline-residual-escalation-rejected');
+  if (escalation?.attempted && !escalation.accepted) {
+    flags.push('outline-residual-escalation-rejected');
+    flags.push(...rejectedOutlineAcceptanceFlags(escalation));
+  }
   if (!post) return flags;
 
   const score = Math.max(0, finite(post.score, 0));
