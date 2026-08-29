@@ -193,9 +193,13 @@ test('localized crossing scene edge can use partial protected outline cleanup aw
     partialMinOutlineScore: 0.15,
     partialMinOutlineDensity: 0.005,
     partialMinOutlineSamples: 4,
+    partialMinSafeContourPixels: 10,
+    partialMinSafeContourRatio: 0.30,
+    partialMinSafeSampleDensity: 0.005,
     maxPartialCrossingSceneEdgeScore: 1,
     maxPartialSceneEdgeDensity: 0.25,
     maxPartialSceneEdgeContinuityDensity: 0.20,
+    maxPartialSceneGuardedRatio: 0.70,
     partialHardSceneGuard: 0.45,
     partialMinImprovement: -0.01,
     partialMaxOutlineRatio: 1.01,
@@ -244,13 +248,17 @@ test('partial scene protection stays closed when crossing structure covers too m
     partialMinOutlineScore: 0.01,
     partialMinOutlineDensity: 0.001,
     partialMinOutlineSamples: 1,
+    partialMinSafeContourPixels: 10,
+    partialMinSafeContourRatio: 0.30,
+    partialMinSafeSampleDensity: 0.005,
     maxPartialCrossingSceneEdgeScore: 1,
-    maxPartialSceneEdgeDensity: 0.02,
-    maxPartialSceneEdgeContinuityDensity: 0.01
+    maxPartialSceneEdgeDensity: 0.05,
+    maxPartialSceneEdgeContinuityDensity: 0.02,
+    maxPartialSceneGuardedRatio: 1
   });
   const rescue = result.outlineResidualEscalation;
   assert.equal(rescue.sceneSafe, false, JSON.stringify(rescue.crossingSceneEdge));
-  assert.equal(rescue.partialSceneGate.coverageSafe, false, JSON.stringify(rescue.partialSceneGate));
+  assert.equal(rescue.partialSceneGate.globalComplexitySafe, false, JSON.stringify(rescue.partialSceneGate));
   assert.equal(rescue.partialSceneProtected, false, JSON.stringify(rescue));
   assert.equal(rescue.sceneMode, 'blocked', JSON.stringify(rescue));
   assert.equal(rescue.attempted, false, JSON.stringify(rescue));

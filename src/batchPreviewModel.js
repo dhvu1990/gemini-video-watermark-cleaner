@@ -14,7 +14,14 @@ export function humanizeBatchCandidate(candidateId = '') {
 }
 
 export function batchBackgroundLabel(preview = null) {
-  const rescueMode = preview?.structuredSmoothRescue?.acceptedMode || null;
+  const rescue = preview?.structuredSmoothRescue || null;
+  const rescueMode = rescue?.acceptedMode || null;
+  const outline = rescue?.outlineResidualEscalation || null;
+  const partial = outline?.partialSceneProtected === true;
+  const contourOverride = outline?.contourBodyOverride === true;
+  if (rescueMode?.includes('outline-escalation') && partial && contourOverride) return 'Protected contour-only outline rescue';
+  if (rescueMode?.includes('outline-escalation') && partial) return 'Partial scene-protected outline rescue';
+  if (rescueMode?.includes('outline-escalation') && contourOverride) return 'Contour-only outline rescue';
   if (rescueMode === 'final-visual-residual-rescue') return 'Final visual residual rescue';
   if (rescueMode === 'structured-smooth+final-visual') return 'Structured smooth + final visual rescue';
   if (rescueMode === 'outline-residual-escalation') return 'Outline residual escalation';
@@ -49,6 +56,9 @@ function outlineResidualRiskFlags(preview = null) {
   const escalation = rescue.outlineResidualEscalation || null;
   const post = rescue.postChainOutlineResidual || null;
   const flags = [];
+
+  if (escalation?.partialSceneProtected) flags.push('outline-partial-scene-protection');
+  if (escalation?.contourBodyOverride) flags.push('outline-contour-body-override');
   if (escalation?.attempted && !escalation.accepted) flags.push('outline-residual-escalation-rejected');
   if (!post) return flags;
 
@@ -59,7 +69,14 @@ function outlineResidualRiskFlags(preview = null) {
   const strong = post.strong === true || (score >= 1.15 && density >= 0.075 && samples >= 12 && sectors >= 3);
   if (!strong) return flags;
 
-  const sceneSafe = rescue.postChainOutlineSceneSafe !== false && escalation?.sceneSafe !== false;
+  if (!escalation?.attempted && escalation?.sceneMode === 'blocked') flags.push('outline-scene-gate-blocked');
+  if (!escalation?.attempted && escalation?.bodyMode === 'blocked') flags.push('outline-body-gate-blocked');
+
+  const sceneEligible = escalation?.sceneEligible;
+  const escalationSceneSafe = sceneEligible === undefined
+    ? escalation?.sceneSafe !== false
+    : sceneEligible !== false;
+  const sceneSafe = rescue.postChainOutlineSceneSafe !== false && escalationSceneSafe;
   flags.push(sceneSafe ? 'post-chain-outline-watermark-residual' : 'post-chain-outline-scene-protected');
   return flags;
 }
