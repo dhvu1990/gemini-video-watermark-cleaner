@@ -1,9 +1,9 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.109",
+  "version": "1.0.110",
   "private": true,
   "type": "module",
-  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with sector-safe contour completion, contour-safe scene protection, preview/export calibration parity, post-chain outline verification and artifact-safe cleanup.",
+  "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with guarded contour rescue, contour-safe scene protection, preview/export calibration parity, post-chain outline verification and artifact-safe cleanup.",
   "scripts": {
     "setup:alpha": "node scripts/sync-alpha-assets.mjs",
     "dev": "vite",

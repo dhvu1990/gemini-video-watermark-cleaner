@@ -78,27 +78,37 @@ function outlineEscalationOptions(options = {}) {
     minOutlineDominance: finite(options.outlineEscalationMinDominance, 0.82),
     maxBodyScore: finite(options.outlineEscalationMaxBodyScore, 2.35),
     maxBodyDensity: finite(options.outlineEscalationMaxBodyDensity, 0.38),
-    maxSceneGuardedRatio: finite(options.outlineEscalationMaxSceneGuardedRatio, 0.52),
+    maxSceneGuardedRatio: finite(options.outlineEscalationMaxSceneGuardedRatio, 0.68),
     strength: finite(options.outlineEscalationStrength, 0.58),
     maxBlend: finite(options.outlineEscalationMaxBlend, 0.48),
     maxLumaDelta: finite(options.outlineEscalationMaxLumaDelta, 11),
     hardSceneGuard: finite(options.outlineEscalationHardSceneGuard, 0.62),
     minImprovement: finite(options.outlineEscalationMinImprovement, 0.035),
     partialSceneProtection: options.outlineEscalationPartialSceneProtection !== false,
-    maxPartialSceneGuardedRatio: finite(options.outlineEscalationMaxPartialSceneGuardedRatio, 0.52),
+    maxPartialSceneGuardedRatio: finite(options.outlineEscalationMaxPartialSceneGuardedRatio, 0.68),
     partialMinOutlineScore: finite(options.outlineEscalationPartialMinScore, 1.18),
     partialMinOutlineDensity: finite(options.outlineEscalationPartialMinDensity, 0.075),
     partialMinOutlineSamples: Math.max(8, Math.round(finite(options.outlineEscalationPartialMinSamples, 12))),
-    partialMinSafeContourRatio: finite(options.outlineEscalationPartialMinSafeContourRatio, 0.48),
-    partialMinSafeContourPixels: Math.max(10, Math.round(finite(options.outlineEscalationPartialMinSafeContourPixels, 16))),
-    partialMinSafeSampleDensity: finite(options.outlineEscalationPartialMinSafeSampleDensity, 0.035),
+    partialMinSafeContourRatio: finite(options.outlineEscalationPartialMinSafeContourRatio, 0.30),
+    partialMinSafeContourPixels: Math.max(10, Math.round(finite(options.outlineEscalationPartialMinSafeContourPixels, 12))),
+    partialMinSafeSampleDensity: finite(options.outlineEscalationPartialMinSafeSampleDensity, 0.025),
+    maxPartialSceneEdgeDensity: finite(options.outlineEscalationMaxPartialSceneEdgeDensity, 0.42),
+    maxPartialSceneEdgeContinuityDensity: finite(options.outlineEscalationMaxPartialSceneEdgeContinuityDensity, 0.34),
+    partialStrength: finite(options.outlineEscalationPartialStrength, 0.46),
+    partialMaxBlend: finite(options.outlineEscalationPartialMaxBlend, 0.36),
+    partialMaxLumaDelta: finite(options.outlineEscalationPartialMaxLumaDelta, 8),
+    partialHardSceneGuard: finite(options.outlineEscalationPartialHardSceneGuard, 0.44),
     contourBodyOverride: options.outlineEscalationContourBodyOverride !== false,
     bodyOverrideMinOutlineScore: finite(options.outlineEscalationBodyOverrideMinScore, 1.25),
     bodyOverrideMinOutlineDensity: finite(options.outlineEscalationBodyOverrideMinDensity, 0.075),
     bodyOverrideMinOutlineSamples: Math.max(8, Math.round(finite(options.outlineEscalationBodyOverrideMinSamples, 12))),
     bodyOverrideMinSectorSupport: Math.max(3, Math.round(finite(options.outlineEscalationBodyOverrideMinSectorSupport, 3))),
-    bodyOverrideMaxBodyScore: finite(options.outlineEscalationBodyOverrideMaxBodyScore, 8.0),
-    bodyOverrideMinDominance: finite(options.outlineEscalationBodyOverrideMinDominance, 0.30),
+    bodyOverrideMaxBodyScore: finite(options.outlineEscalationBodyOverrideMaxBodyScore, 12.0),
+    bodyOverrideMinDominance: finite(options.outlineEscalationBodyOverrideMinDominance, 0.20),
+    bodyOverrideStrength: finite(options.outlineEscalationBodyOverrideStrength, 0.44),
+    bodyOverrideMaxBlend: finite(options.outlineEscalationBodyOverrideMaxBlend, 0.34),
+    bodyOverrideMaxLumaDelta: finite(options.outlineEscalationBodyOverrideMaxLumaDelta, 7),
+    bodyOverrideHardSceneGuard: finite(options.outlineEscalationBodyOverrideHardSceneGuard, 0.50),
     ...(options.outlineEscalationOptions || {})
   };
 }
@@ -194,9 +204,6 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  // Always verify the selected image after the final visual-residual stage. A
-  // localized scene edge is now protected per pixel instead of automatically
-  // vetoing cleanup of every other low-alpha watermark-contour pixel.
   const escalated = applyOutlineResidualEscalation(selected, alphaMap, outlineEscalationOptions(options));
   const outlineResidualEscalation = escalated.outlineResidualEscalation || null;
   const outlineEscalationAccepted = Boolean(outlineResidualEscalation?.accepted);
