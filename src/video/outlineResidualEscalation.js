@@ -113,36 +113,95 @@ function residualBodyWeak(body, outline, options = {}) {
   };
 }
 
-function partialSceneEligibility(crossingSceneEdge, outline, options = {}) {
-  const maxScore = Number.isFinite(options.maxPartialCrossingSceneEdgeScore)
-    ? options.maxPartialCrossingSceneEdgeScore
-    : 0.62;
-  const maxDensity = Number.isFinite(options.maxPartialSceneEdgeDensity)
-    ? options.maxPartialSceneEdgeDensity
-    : 0.10;
-  const maxContinuityDensity = Number.isFinite(options.maxPartialSceneEdgeContinuityDensity)
-    ? options.maxPartialSceneEdgeContinuityDensity
-    : 0.070;
-  const minScore = Math.max(options.minOutlineScore ?? 1.15, options.partialMinOutlineScore ?? 1.35);
-  const minDensity = Math.max(options.minOutlineDensity ?? 0.075, options.partialMinOutlineDensity ?? 0.085);
-  const minSamples = Math.max(options.minOutlineSamples ?? 12, options.partialMinOutlineSamples ?? 14);
+function safeContourEvidence(outline = {}) {
+  const contourPixels = Math.max(0, Number(outline.contourPixels) || 0);
+  const guardedPixels = Math.max(0, Math.min(contourPixels, Number(outline.sceneGuarded) || 0));
+  const safeContourPixels = Math.max(0, contourPixels - guardedPixels);
+  const safeContourRatio = contourPixels ? safeContourPixels / contourPixels : 0;
+  const safeSampleDensity = safeContourPixels
+    ? Math.max(0, Number(outline.samples) || 0) / safeContourPixels
+    : 0;
+  return { contourPixels, guardedPixels, safeContourPixels, safeContourRatio, safeSampleDensity };
+}
+
+function partialSceneEligibility(crossingSceneEdge, outline, guardedRatio, options = {}) {
+  const minScore = Math.max(options.minOutlineScore ?? 1.15, options.partialMinOutlineScore ?? 1.22);
+  const minDensity = Math.max(options.minOutlineDensity ?? 0.075, options.partialMinOutlineDensity ?? 0.075);
+  const minSamples = Math.max(options.minOutlineSamples ?? 12, options.partialMinOutlineSamples ?? 12);
   const evidenceStrong = outline.score >= minScore
     && outline.candidateDensity >= minDensity
     && outline.samples >= minSamples;
-  const coverageSafe = Number(crossingSceneEdge?.density ?? 1) <= maxDensity
-    && Number(crossingSceneEdge?.continuityDensity ?? 1) <= maxContinuityDensity;
-  const severitySafe = Number(crossingSceneEdge?.score ?? 1) <= maxScore;
+
+  const safeContour = safeContourEvidence(outline);
+  const minSafeContourPixels = Math.max(10, Math.round(Number(options.partialMinSafeContourPixels ?? 18)));
+  const minSafeContourRatio = clamp(Number(options.partialMinSafeContourRatio ?? 0.58), 0.30, 0.95);
+  const minSafeSampleDensity = clamp(Number(options.partialMinSafeSampleDensity ?? 0.045), 0.005, 0.50);
+  const safeCoverage = safeContour.safeContourPixels >= minSafeContourPixels
+    && safeContour.safeContourRatio >= minSafeContourRatio
+    && safeContour.safeSampleDensity >= minSafeSampleDensity;
+
+  // The global crossing metric can be high because a single genuine line cuts
+  // through the ROI, or because a residual diamond is imperfectly registered.
+  // Use it only as a dense-complexity veto. Eligibility is primarily based on
+  // watermark-contour evidence that remains after per-pixel scene guards.
+  const maxGlobalScore = clamp(Number(options.maxPartialCrossingSceneEdgeScore ?? 0.98), 0.30, 1);
+  const maxGlobalDensity = clamp(Number(options.maxPartialSceneEdgeDensity ?? 0.32), 0.05, 0.70);
+  const maxGlobalContinuityDensity = clamp(Number(options.maxPartialSceneEdgeContinuityDensity ?? 0.24), 0.02, 0.60);
+  const globalComplexitySafe = Number(crossingSceneEdge?.score ?? 1) <= maxGlobalScore
+    && Number(crossingSceneEdge?.density ?? 1) <= maxGlobalDensity
+    && Number(crossingSceneEdge?.continuityDensity ?? 1) <= maxGlobalContinuityDensity;
+  const maxPartialGuardedRatio = clamp(Number(options.maxPartialSceneGuardedRatio ?? 0.34), 0.10, 0.65);
+  const contourLocalizationSafe = guardedRatio <= maxPartialGuardedRatio;
+
   return {
-    eligible: evidenceStrong && coverageSafe && severitySafe,
+    eligible: evidenceStrong && safeCoverage && globalComplexitySafe && contourLocalizationSafe,
     evidenceStrong,
-    coverageSafe,
-    severitySafe,
-    maxScore,
-    maxDensity,
-    maxContinuityDensity,
+    safeCoverage,
+    globalComplexitySafe,
+    contourLocalizationSafe,
+    safeContour,
+    guardedRatio,
     minScore,
     minDensity,
-    minSamples
+    minSamples,
+    minSafeContourPixels,
+    minSafeContourRatio,
+    minSafeSampleDensity,
+    maxGlobalScore,
+    maxGlobalDensity,
+    maxGlobalContinuityDensity,
+    maxPartialGuardedRatio
+  };
+}
+
+function contourBodyOverrideEligibility(body, outline, options = {}) {
+  const enabled = options.contourBodyOverride === true;
+  const minScore = Math.max(options.minOutlineScore ?? 1.15, options.bodyOverrideMinOutlineScore ?? 1.35);
+  const minDensity = Math.max(options.minOutlineDensity ?? 0.075, options.bodyOverrideMinOutlineDensity ?? 0.085);
+  const minSamples = Math.max(options.minOutlineSamples ?? 12, options.bodyOverrideMinOutlineSamples ?? 16);
+  const minSectorSupport = Math.max(options.minSectorSupport ?? 3, options.bodyOverrideMinSectorSupport ?? 4);
+  const maxBodyScore = Math.max(0.5, Number(options.bodyOverrideMaxBodyScore ?? 6.0));
+  const minDominance = clamp(Number(options.bodyOverrideMinDominance ?? 0.42), 0.05, 1.50);
+  const outlineDominance = outline.score / Math.max(0.35, body.score);
+  const outlineStrong = outline.score >= minScore
+    && outline.candidateDensity >= minDensity
+    && outline.samples >= minSamples
+    && outline.sectorSupport >= minSectorSupport;
+  const bodyBounded = body.score <= maxBodyScore;
+  const dominanceSafe = outlineDominance >= minDominance;
+  return {
+    eligible: enabled && outlineStrong && bodyBounded && dominanceSafe,
+    enabled,
+    outlineStrong,
+    bodyBounded,
+    dominanceSafe,
+    outlineDominance,
+    minScore,
+    minDensity,
+    minSamples,
+    minSectorSupport,
+    maxBodyScore,
+    minDominance
   };
 }
 
@@ -161,27 +220,34 @@ function eligibility(image, alphaMap, options = {}) {
     && outline.candidateDensity >= (options.minOutlineDensity ?? 0.075)
     && outline.samples >= (options.minOutlineSamples ?? 12);
   const bodyGate = residualBodyWeak(body, outline, options);
+  const bodyOverrideGate = contourBodyOverrideEligibility(body, outline, options);
+  const contourBodyOverride = !bodyGate.weak && bodyOverrideGate.eligible;
+  const bodyEligible = bodyGate.weak || contourBodyOverride;
+  const bodyMode = bodyGate.weak ? 'weak-body' : (contourBodyOverride ? 'contour-only-override' : 'blocked');
+
   const guardedRatio = outline.contourPixels > 0 ? outline.sceneGuarded / outline.contourPixels : 1;
   const contourSceneSafe = guardedRatio <= (options.maxSceneGuardedRatio ?? 0.34);
   const crossingSceneSafe = !crossingSceneEdge.protect
     && crossingSceneEdge.level !== 'high'
     && Number(crossingSceneEdge.score ?? 1) <= (options.maxCrossingSceneEdgeScore ?? 0.30);
   const sceneSafe = contourSceneSafe && crossingSceneSafe;
-  const partialSceneGate = partialSceneEligibility(crossingSceneEdge, outline, options);
-  // A single real line crossing the ROI used to disable the whole outline pass.
-  // The actual correction is already guarded per pixel, so allow a stricter
-  // partial mode when scene-edge coverage is localized and watermark evidence
-  // remains strong away from that line. Dense/complex structure stays blocked.
+  const partialSceneGate = partialSceneEligibility(crossingSceneEdge, outline, guardedRatio, options);
+  // A localized real line must not disable cleanup of every other low-alpha
+  // diamond-contour pixel. The candidate pass still applies a stricter scene
+  // guard at each pixel, and the normal before/after rollback metrics remain.
   const partialSceneProtected = options.partialSceneProtection !== false
     && contourSceneSafe
     && !crossingSceneSafe
     && partialSceneGate.eligible;
   const sceneEligible = sceneSafe || partialSceneProtected;
   const sceneMode = sceneSafe ? 'full' : (partialSceneProtected ? 'partial-protected' : 'blocked');
+
   return {
-    eligible: options.enabled !== false && strongOutline && sectorSafe && bodyGate.weak && sceneEligible,
+    eligible: options.enabled !== false && strongOutline && sectorSafe && bodyEligible && sceneEligible,
     strongOutline,
     sectorSafe,
+    bodyEligible,
+    bodyMode,
     bodyWeak: bodyGate.weak,
     bodyScoreWeak: bodyGate.bodyScoreWeak,
     bodyDensityWeak: bodyGate.bodyDensityWeak,
@@ -189,6 +255,8 @@ function eligibility(image, alphaMap, options = {}) {
     lowBodyScoreOverride: bodyGate.lowBodyScoreOverride,
     outlineDominance: bodyGate.outlineDominance,
     bodyDominanceSafe: bodyGate.dominanceSafe,
+    contourBodyOverride,
+    bodyOverrideGate,
     sceneSafe,
     sceneEligible,
     sceneMode,
@@ -209,22 +277,31 @@ function buildCandidate(image, alphaMap, options = {}) {
   let guardedPixels = 0;
   let blendSum = 0;
   const partialSceneProtected = options.partialSceneProtected === true;
+  const contourBodyOverride = options.contourBodyOverrideActive === true;
   const requestedStrength = clamp(Number(options.strength ?? 0.58), 0.20, 0.72);
   const requestedMaxBlend = clamp(Number(options.maxBlend ?? 0.48), 0.18, 0.56);
   const requestedMaxDelta = Math.max(4, Math.min(14, Number(options.maxLumaDelta ?? 11)));
-  const strength = partialSceneProtected
-    ? Math.min(requestedStrength, clamp(Number(options.partialStrength ?? 0.50), 0.20, 0.58))
-    : requestedStrength;
-  const maxBlend = partialSceneProtected
-    ? Math.min(requestedMaxBlend, clamp(Number(options.partialMaxBlend ?? 0.40), 0.16, 0.46))
-    : requestedMaxBlend;
-  const maxDelta = partialSceneProtected
-    ? Math.min(requestedMaxDelta, Math.max(4, Math.min(10, Number(options.partialMaxLumaDelta ?? 9))))
-    : requestedMaxDelta;
-  const hardSceneGuard = partialSceneProtected
-    ? Math.min(options.hardSceneGuard ?? 0.62, options.partialHardSceneGuard ?? 0.50)
-    : (options.hardSceneGuard ?? 0.62);
-  const sceneAttenuation = partialSceneProtected ? 1.08 : 0.97;
+
+  let strength = requestedStrength;
+  let maxBlend = requestedMaxBlend;
+  let maxDelta = requestedMaxDelta;
+  let hardSceneGuard = options.hardSceneGuard ?? 0.62;
+  let sceneAttenuation = 0.97;
+
+  if (partialSceneProtected) {
+    strength = Math.min(strength, clamp(Number(options.partialStrength ?? 0.50), 0.20, 0.58));
+    maxBlend = Math.min(maxBlend, clamp(Number(options.partialMaxBlend ?? 0.40), 0.16, 0.46));
+    maxDelta = Math.min(maxDelta, Math.max(4, Math.min(10, Number(options.partialMaxLumaDelta ?? 9))));
+    hardSceneGuard = Math.min(hardSceneGuard, Number(options.partialHardSceneGuard ?? 0.48));
+    sceneAttenuation = 1.10;
+  }
+  if (contourBodyOverride) {
+    strength = Math.min(strength, clamp(Number(options.bodyOverrideStrength ?? 0.48), 0.20, 0.56));
+    maxBlend = Math.min(maxBlend, clamp(Number(options.bodyOverrideMaxBlend ?? 0.38), 0.16, 0.44));
+    maxDelta = Math.min(maxDelta, Math.max(4, Math.min(10, Number(options.bodyOverrideMaxLumaDelta ?? 8))));
+    hardSceneGuard = Math.min(hardSceneGuard, Number(options.bodyOverrideHardSceneGuard ?? 0.56));
+    sceneAttenuation = Math.max(sceneAttenuation, 1.02);
+  }
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
@@ -268,6 +345,7 @@ function buildCandidate(image, alphaMap, options = {}) {
     guardedPixels,
     meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
     partialSceneProtected,
+    contourBodyOverride,
     effectiveStrength: strength,
     effectiveMaxBlend: maxBlend,
     effectiveMaxLumaDelta: maxDelta,
@@ -294,7 +372,11 @@ export function applyOutlineResidualEscalation(image, alphaMap, options = {}) {
     };
   }
 
-  const candidateOptions = { ...options, partialSceneProtected: gate.partialSceneProtected };
+  const candidateOptions = {
+    ...options,
+    partialSceneProtected: gate.partialSceneProtected,
+    contourBodyOverrideActive: gate.contourBodyOverride
+  };
   const candidate = buildCandidate(image, alphaMap, candidateOptions);
   const afterOutline = measureGeometricOutlineResidual(candidate, alphaMap, {
     ...options,
@@ -305,13 +387,22 @@ export function applyOutlineResidualEscalation(image, alphaMap, options = {}) {
   });
   const afterGlobal = measurePostCleanupResidual(candidate, alphaMap);
   const improvement = gate.outline.score > 1e-6 ? (gate.outline.score - afterOutline.score) / gate.outline.score : 0;
+  const conservativeMode = gate.partialSceneProtected || gate.contourBodyOverride;
   const minImprovement = gate.partialSceneProtected
-    ? (options.partialMinImprovement ?? Math.min(options.minImprovement ?? 0.035, 0.025))
-    : (options.minImprovement ?? 0.035);
+    ? (options.partialMinImprovement ?? Math.min(options.minImprovement ?? 0.035, 0.020))
+    : (gate.contourBodyOverride
+      ? (options.bodyOverrideMinImprovement ?? Math.min(options.minImprovement ?? 0.035, 0.025))
+      : (options.minImprovement ?? 0.035));
   const maxOutlineRatio = gate.partialSceneProtected
     ? (options.partialMaxOutlineRatio ?? 0.98)
-    : (options.maxOutlineRatio ?? 0.965);
+    : (gate.contourBodyOverride
+      ? (options.bodyOverrideMaxOutlineRatio ?? 0.975)
+      : (options.maxOutlineRatio ?? 0.965));
+  const maxMeanBlend = conservativeMode
+    ? Number(options.conservativeMaxMeanBlend ?? 0.42)
+    : Number(options.maxMeanBlend ?? 0.50);
   const accepted = candidate.correctedPixels >= (options.minCorrectedPixels ?? 6)
+    && candidate.meanBlend <= maxMeanBlend
     && improvement >= minImprovement
     && afterOutline.score <= gate.outline.score * maxOutlineRatio
     && afterGlobal.total <= beforeGlobal.total * 1.005 + (options.maxTotalIncrease ?? 0.05)
@@ -340,8 +431,10 @@ export function applyOutlineResidualEscalation(image, alphaMap, options = {}) {
       effectiveMaxBlend: candidate.effectiveMaxBlend,
       effectiveMaxLumaDelta: candidate.effectiveMaxLumaDelta,
       effectiveHardSceneGuard: candidate.effectiveHardSceneGuard,
+      conservativeMode,
       minImprovement,
       maxOutlineRatio,
+      maxMeanBlend,
       beforeGlobal,
       afterGlobal: accepted ? afterGlobal : beforeGlobal,
       candidateAfterGlobal: afterGlobal
