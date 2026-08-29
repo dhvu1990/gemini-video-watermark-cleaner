@@ -69,8 +69,25 @@ function outlineResidualRiskFlags(preview = null) {
   const strong = post.strong === true || (score >= 1.15 && density >= 0.075 && samples >= 12 && sectors >= 3);
   if (!strong) return flags;
 
-  if (!escalation?.attempted && escalation?.sceneMode === 'blocked') flags.push('outline-scene-gate-blocked');
-  if (!escalation?.attempted && escalation?.bodyMode === 'blocked') flags.push('outline-body-gate-blocked');
+  if (!escalation?.attempted && escalation?.sceneMode === 'blocked') {
+    flags.push('outline-scene-gate-blocked');
+    const partial = escalation?.partialSceneGate || null;
+    if (partial) {
+      if (partial.evidenceStrong === false) flags.push('outline-partial-evidence-blocked');
+      if (partial.safeCoverage === false) flags.push('outline-partial-safe-coverage-blocked');
+      if (partial.globalComplexitySafe === false) flags.push('outline-partial-global-complexity-blocked');
+      if (partial.contourLocalizationSafe === false) flags.push('outline-partial-localization-blocked');
+    }
+  }
+  if (!escalation?.attempted && escalation?.bodyMode === 'blocked') {
+    flags.push('outline-body-gate-blocked');
+    const body = escalation?.bodyOverrideGate || null;
+    if (body) {
+      if (body.outlineStrong === false) flags.push('outline-body-outline-evidence-blocked');
+      if (body.bodyBounded === false) flags.push('outline-body-score-blocked');
+      if (body.dominanceSafe === false) flags.push('outline-body-dominance-blocked');
+    }
+  }
 
   const sceneEligible = escalation?.sceneEligible;
   const escalationSceneSafe = sceneEligible === undefined
