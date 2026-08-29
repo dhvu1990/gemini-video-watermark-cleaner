@@ -7,6 +7,7 @@ import {
   measureGeometricOutlineResidual
 } from './protectedResidualRescue.js';
 import { applyOutlineResidualEscalation } from './outlineResidualEscalation.js';
+import { applyContourMicroInterpolation } from './contourMicroInterpolation.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
@@ -118,6 +119,30 @@ function outlineEscalationOptions(options = {}) {
   };
 }
 
+function microInterpolationOptions(options = {}) {
+  return {
+    enabled: options.contourMicroInterpolationEnabled !== false,
+    minScore: finite(options.contourMicroInterpolationMinScore, 1.10),
+    minDensity: finite(options.contourMicroInterpolationMinDensity, 0.055),
+    minSamples: Math.max(8, Math.round(finite(options.contourMicroInterpolationMinSamples, 10))),
+    minSectors: Math.max(2, Math.round(finite(options.contourMicroInterpolationMinSectors, 2))),
+    minAlpha: finite(options.contourMicroInterpolationMinAlpha, 0.018),
+    maxAlpha: finite(options.contourMicroInterpolationMaxAlpha, 0.28),
+    cleanAlpha: finite(options.contourMicroInterpolationCleanAlpha, 0.014),
+    maxRadius: Math.max(4, Math.round(finite(options.contourMicroInterpolationMaxRadius, 12))),
+    hardSceneGuard: finite(options.contourMicroInterpolationHardSceneGuard, 0.40),
+    strength: finite(options.contourMicroInterpolationStrength, 0.42),
+    maxBlend: finite(options.contourMicroInterpolationMaxBlend, 0.30),
+    maxLumaDelta: finite(options.contourMicroInterpolationMaxLumaDelta, 7),
+    minCorrectedPixels: Math.max(4, Math.round(finite(options.contourMicroInterpolationMinCorrectedPixels, 6))),
+    minImprovement: finite(options.contourMicroInterpolationMinImprovement, 0.006),
+    maxOutlineRatio: finite(options.contourMicroInterpolationMaxOutlineRatio, 0.994),
+    maxMeanBlend: finite(options.contourMicroInterpolationMaxMeanBlend, 0.28),
+    sceneEdgeOptions: options.sceneEdgeOptions || {},
+    ...(options.contourMicroInterpolationOptions || {})
+  };
+}
+
 function measurePostChainOutlineResidual(image, alphaMap, options = {}) {
   const outlineOptions = outlineEscalationOptions(options);
   const residual = measureGeometricOutlineResidual(image, alphaMap, {
@@ -220,7 +245,18 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted;
+  const microCandidate = applyContourMicroInterpolation(selected, alphaMap, microInterpolationOptions(options));
+  const contourMicroInterpolation = microCandidate.contourMicroInterpolation || null;
+  const contourMicroInterpolationAccepted = Boolean(contourMicroInterpolation?.accepted);
+  if (contourMicroInterpolationAccepted) {
+    selected = {
+      width: microCandidate.width,
+      height: microCandidate.height,
+      data: new Uint8ClampedArray(microCandidate.data)
+    };
+  }
+
+  const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted || contourMicroInterpolationAccepted;
   let acceptedMode = 'none';
   if (outlineEscalationAccepted) {
     if (structuredAccepted && finalAccepted) acceptedMode = 'structured-smooth+final-visual+outline-escalation';
@@ -231,6 +267,11 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     acceptedMode = structuredAccepted ? 'structured-smooth+final-visual' : 'final-visual-residual-rescue';
   } else if (structuredAccepted) {
     acceptedMode = 'structured-smooth-rescue';
+  }
+  if (contourMicroInterpolationAccepted) {
+    acceptedMode = acceptedMode === 'none'
+      ? 'contour-micro-interpolation'
+      : `${acceptedMode}+contour-micro-interpolation`;
   }
 
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
@@ -244,7 +285,10 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     data: selected.data,
     structuredSmoothRescue: {
       enabled: options.enabled !== false,
-      attempted: structuredAttempted || Boolean(finalVisualResidual?.attempted) || Boolean(outlineResidualEscalation?.attempted),
+      attempted: structuredAttempted
+        || Boolean(finalVisualResidual?.attempted)
+        || Boolean(outlineResidualEscalation?.attempted)
+        || Boolean(contourMicroInterpolation?.attempted),
       accepted,
       acceptedMode,
       structuredAttempted,
@@ -252,6 +296,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       structuredAccepted,
       finalVisualAccepted: finalAccepted,
       outlineEscalationAccepted,
+      contourMicroInterpolationAccepted,
       ...gate,
       beforeGlobal,
       afterGlobal: finalGlobal,
@@ -268,6 +313,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       artifactGuard,
       finalVisualResidual,
       outlineResidualEscalation,
+      contourMicroInterpolation,
       postChainOutlineResidual,
       postChainOutlineSceneSafe
     }
