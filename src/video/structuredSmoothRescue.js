@@ -84,6 +84,8 @@ function outlineEscalationOptions(options = {}) {
     maxLumaDelta: finite(options.outlineEscalationMaxLumaDelta, 11),
     hardSceneGuard: finite(options.outlineEscalationHardSceneGuard, 0.62),
     minImprovement: finite(options.outlineEscalationMinImprovement, 0.035),
+    partialSceneProtection: options.outlineEscalationPartialSceneProtection !== false,
+    contourBodyOverride: options.outlineEscalationContourBodyOverride !== false,
     ...(options.outlineEscalationOptions || {})
   };
 }
@@ -179,11 +181,9 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  // Always verify the selected image after the final visual-residual stage. In
-  // v1.0.104 an accepted broad/final rescue short-circuited this pass, so a
-  // thin low-alpha diamond contour could remain visible while the result was
-  // already considered accepted. The outline pass still owns its strong-outline,
-  // weak-body, multi-sector, crossing-scene-edge and rollback gates.
+  // Always verify the selected image after the final visual-residual stage. A
+  // localized scene edge is now protected per pixel instead of automatically
+  // vetoing cleanup of every other low-alpha watermark-contour pixel.
   const escalated = applyOutlineResidualEscalation(selected, alphaMap, outlineEscalationOptions(options));
   const outlineResidualEscalation = escalated.outlineResidualEscalation || null;
   const outlineEscalationAccepted = Boolean(outlineResidualEscalation?.accepted);
@@ -211,7 +211,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
   const postChainOutlineResidual = measurePostChainOutlineResidual(selected, alphaMap, options);
-  const postChainOutlineSceneSafe = outlineResidualEscalation?.sceneSafe !== false;
+  const postChainOutlineSceneSafe = outlineResidualEscalation?.sceneEligible !== false;
 
   return {
     width: selected.width,
