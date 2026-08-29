@@ -19,6 +19,7 @@ export function batchBackgroundLabel(preview = null) {
   const outline = rescue?.outlineResidualEscalation || null;
   const partial = outline?.partialSceneProtected === true;
   const contourOverride = outline?.contourBodyOverride === true;
+  if (rescueMode?.includes('contour-micro-interpolation')) return 'Contour micro-interpolation finishing';
   if (rescueMode?.includes('outline-escalation') && partial && contourOverride) return 'Protected contour-only outline rescue';
   if (rescueMode?.includes('outline-escalation') && partial) return 'Partial scene-protected outline rescue';
   if (rescueMode?.includes('outline-escalation') && contourOverride) return 'Contour-only outline rescue';
@@ -80,6 +81,25 @@ function rejectedOutlineAcceptanceFlags(escalation = null) {
     flags.push('outline-reject-global-chroma');
   }
   if (!flags.length) flags.push('outline-reject-unclassified');
+  return flags;
+}
+
+function microInterpolationRiskFlags(preview = null) {
+  const micro = preview?.structuredSmoothRescue?.contourMicroInterpolation || null;
+  if (!micro) return [];
+  const flags = [];
+  if (micro.accepted) flags.push('contour-micro-interpolation-accepted');
+  else if (micro.attempted) {
+    flags.push('contour-micro-interpolation-rejected');
+    if (finite(micro.candidateCorrectedPixels, 0) < finite(micro.minCorrectedPixels, 6)) flags.push('micro-reject-too-few-pixels');
+    if (finite(micro.candidateMeanBlend, 0) > finite(micro.maxMeanBlend, 0.28)) flags.push('micro-reject-mean-blend');
+    if (finite(micro.candidateImprovement, -Infinity) < finite(micro.minImprovement, 0.006)) flags.push('micro-reject-local-improvement');
+    const beforeOutline = micro.beforeOutline || {};
+    const afterOutline = micro.candidateAfterOutline || {};
+    if (finite(afterOutline.score, Infinity) > finite(beforeOutline.score, 0) * finite(micro.maxOutlineRatio, 0.994)) {
+      flags.push('micro-reject-outline-ratio');
+    }
+  }
   return flags;
 }
 
@@ -167,7 +187,8 @@ export function buildBatchDetectionView(detection = null, preview = null) {
   const flags = [...new Set([
     ...existingFlags,
     ...finalVisualRiskFlags(preview),
-    ...outlineResidualRiskFlags(preview)
+    ...outlineResidualRiskFlags(preview),
+    ...microInterpolationRiskFlags(preview)
   ])];
 
   return {
