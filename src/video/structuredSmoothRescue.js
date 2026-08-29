@@ -98,6 +98,8 @@ function outlineEscalationOptions(options = {}) {
     partialMaxBlend: finite(options.outlineEscalationPartialMaxBlend, 0.36),
     partialMaxLumaDelta: finite(options.outlineEscalationPartialMaxLumaDelta, 8),
     partialHardSceneGuard: finite(options.outlineEscalationPartialHardSceneGuard, 0.44),
+    partialMinImprovement: finite(options.outlineEscalationPartialMinImprovement, 0.012),
+    partialMaxOutlineRatio: finite(options.outlineEscalationPartialMaxOutlineRatio, 0.988),
     contourBodyOverride: options.outlineEscalationContourBodyOverride !== false,
     bodyOverrideMinOutlineScore: finite(options.outlineEscalationBodyOverrideMinScore, 1.25),
     bodyOverrideMinOutlineDensity: finite(options.outlineEscalationBodyOverrideMinDensity, 0.075),
@@ -109,6 +111,9 @@ function outlineEscalationOptions(options = {}) {
     bodyOverrideMaxBlend: finite(options.outlineEscalationBodyOverrideMaxBlend, 0.34),
     bodyOverrideMaxLumaDelta: finite(options.outlineEscalationBodyOverrideMaxLumaDelta, 7),
     bodyOverrideHardSceneGuard: finite(options.outlineEscalationBodyOverrideHardSceneGuard, 0.50),
+    bodyOverrideMinImprovement: finite(options.outlineEscalationBodyOverrideMinImprovement, 0.015),
+    bodyOverrideMaxOutlineRatio: finite(options.outlineEscalationBodyOverrideMaxOutlineRatio, 0.985),
+    conservativeMaxMeanBlend: finite(options.outlineEscalationConservativeMaxMeanBlend, 0.42),
     ...(options.outlineEscalationOptions || {})
   };
 }
