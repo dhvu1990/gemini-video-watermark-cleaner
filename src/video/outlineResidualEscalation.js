@@ -113,6 +113,39 @@ function residualBodyWeak(body, outline, options = {}) {
   };
 }
 
+function partialSceneEligibility(crossingSceneEdge, outline, options = {}) {
+  const maxScore = Number.isFinite(options.maxPartialCrossingSceneEdgeScore)
+    ? options.maxPartialCrossingSceneEdgeScore
+    : 0.62;
+  const maxDensity = Number.isFinite(options.maxPartialSceneEdgeDensity)
+    ? options.maxPartialSceneEdgeDensity
+    : 0.10;
+  const maxContinuityDensity = Number.isFinite(options.maxPartialSceneEdgeContinuityDensity)
+    ? options.maxPartialSceneEdgeContinuityDensity
+    : 0.070;
+  const minScore = Math.max(options.minOutlineScore ?? 1.15, options.partialMinOutlineScore ?? 1.35);
+  const minDensity = Math.max(options.minOutlineDensity ?? 0.075, options.partialMinOutlineDensity ?? 0.085);
+  const minSamples = Math.max(options.minOutlineSamples ?? 12, options.partialMinOutlineSamples ?? 14);
+  const evidenceStrong = outline.score >= minScore
+    && outline.candidateDensity >= minDensity
+    && outline.samples >= minSamples;
+  const coverageSafe = Number(crossingSceneEdge?.density ?? 1) <= maxDensity
+    && Number(crossingSceneEdge?.continuityDensity ?? 1) <= maxContinuityDensity;
+  const severitySafe = Number(crossingSceneEdge?.score ?? 1) <= maxScore;
+  return {
+    eligible: evidenceStrong && coverageSafe && severitySafe,
+    evidenceStrong,
+    coverageSafe,
+    severitySafe,
+    maxScore,
+    maxDensity,
+    maxContinuityDensity,
+    minScore,
+    minDensity,
+    minSamples
+  };
+}
+
 function eligibility(image, alphaMap, options = {}) {
   const outline = measureGeometricOutlineResidual(image, alphaMap, {
     ...options,
@@ -134,8 +167,19 @@ function eligibility(image, alphaMap, options = {}) {
     && crossingSceneEdge.level !== 'high'
     && Number(crossingSceneEdge.score ?? 1) <= (options.maxCrossingSceneEdgeScore ?? 0.30);
   const sceneSafe = contourSceneSafe && crossingSceneSafe;
+  const partialSceneGate = partialSceneEligibility(crossingSceneEdge, outline, options);
+  // A single real line crossing the ROI used to disable the whole outline pass.
+  // The actual correction is already guarded per pixel, so allow a stricter
+  // partial mode when scene-edge coverage is localized and watermark evidence
+  // remains strong away from that line. Dense/complex structure stays blocked.
+  const partialSceneProtected = options.partialSceneProtection !== false
+    && contourSceneSafe
+    && !crossingSceneSafe
+    && partialSceneGate.eligible;
+  const sceneEligible = sceneSafe || partialSceneProtected;
+  const sceneMode = sceneSafe ? 'full' : (partialSceneProtected ? 'partial-protected' : 'blocked');
   return {
-    eligible: options.enabled !== false && strongOutline && sectorSafe && bodyGate.weak && sceneSafe,
+    eligible: options.enabled !== false && strongOutline && sectorSafe && bodyGate.weak && sceneEligible,
     strongOutline,
     sectorSafe,
     bodyWeak: bodyGate.weak,
@@ -146,6 +190,10 @@ function eligibility(image, alphaMap, options = {}) {
     outlineDominance: bodyGate.outlineDominance,
     bodyDominanceSafe: bodyGate.dominanceSafe,
     sceneSafe,
+    sceneEligible,
+    sceneMode,
+    partialSceneProtected,
+    partialSceneGate,
     contourSceneSafe,
     crossingSceneSafe,
     crossingSceneEdge,
@@ -160,16 +208,30 @@ function buildCandidate(image, alphaMap, options = {}) {
   let correctedPixels = 0;
   let guardedPixels = 0;
   let blendSum = 0;
-  const strength = clamp(Number(options.strength ?? 0.58), 0.20, 0.72);
-  const maxBlend = clamp(Number(options.maxBlend ?? 0.48), 0.18, 0.56);
-  const maxDelta = Math.max(4, Math.min(14, Number(options.maxLumaDelta ?? 11)));
+  const partialSceneProtected = options.partialSceneProtected === true;
+  const requestedStrength = clamp(Number(options.strength ?? 0.58), 0.20, 0.72);
+  const requestedMaxBlend = clamp(Number(options.maxBlend ?? 0.48), 0.18, 0.56);
+  const requestedMaxDelta = Math.max(4, Math.min(14, Number(options.maxLumaDelta ?? 11)));
+  const strength = partialSceneProtected
+    ? Math.min(requestedStrength, clamp(Number(options.partialStrength ?? 0.50), 0.20, 0.58))
+    : requestedStrength;
+  const maxBlend = partialSceneProtected
+    ? Math.min(requestedMaxBlend, clamp(Number(options.partialMaxBlend ?? 0.40), 0.16, 0.46))
+    : requestedMaxBlend;
+  const maxDelta = partialSceneProtected
+    ? Math.min(requestedMaxDelta, Math.max(4, Math.min(10, Number(options.partialMaxLumaDelta ?? 9))))
+    : requestedMaxDelta;
+  const hardSceneGuard = partialSceneProtected
+    ? Math.min(options.hardSceneGuard ?? 0.62, options.partialHardSceneGuard ?? 0.50)
+    : (options.hardSceneGuard ?? 0.62);
+  const sceneAttenuation = partialSceneProtected ? 1.08 : 0.97;
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
       const contour = alphaContourWeight(alphaMap, image.width, image.height, x, y, options);
       if (contour < (options.minContourWeight ?? 0.10)) continue;
       const edge = sceneEdgeProtectionAt(image, alphaMap, x, y, options.sceneEdgeOptions || {});
-      if (edge.weight >= (options.hardSceneGuard ?? 0.62)) {
+      if (edge.weight >= hardSceneGuard) {
         guardedPixels++;
         continue;
       }
@@ -183,7 +245,7 @@ function buildCandidate(image, alphaMap, options = {}) {
       if (residualGate <= 0) continue;
       const agreement = 1 - smoothstep(options.spreadSoft ?? 6.5, options.spreadHard ?? 20, pred.spread);
       const endpoint = 1 - smoothstep(options.endpointSoft ?? 16, options.endpointHard ?? 48, pred.disagreement);
-      const sceneWeight = 1 - edge.weight * 0.97;
+      const sceneWeight = clamp(1 - edge.weight * sceneAttenuation, 0, 1);
       const blend = Math.min(maxBlend, strength * contour * residualGate * agreement * endpoint * sceneWeight);
       if (blend < 0.035) continue;
       const delta = clamp(residual, -maxDelta, maxDelta) * blend;
@@ -204,7 +266,12 @@ function buildCandidate(image, alphaMap, options = {}) {
     data,
     correctedPixels,
     guardedPixels,
-    meanBlend: correctedPixels ? blendSum / correctedPixels : 0
+    meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
+    partialSceneProtected,
+    effectiveStrength: strength,
+    effectiveMaxBlend: maxBlend,
+    effectiveMaxLumaDelta: maxDelta,
+    effectiveHardSceneGuard: hardSceneGuard
   };
 }
 
@@ -227,7 +294,8 @@ export function applyOutlineResidualEscalation(image, alphaMap, options = {}) {
     };
   }
 
-  const candidate = buildCandidate(image, alphaMap, options);
+  const candidateOptions = { ...options, partialSceneProtected: gate.partialSceneProtected };
+  const candidate = buildCandidate(image, alphaMap, candidateOptions);
   const afterOutline = measureGeometricOutlineResidual(candidate, alphaMap, {
     ...options,
     outlineMinAlpha: options.minAlpha ?? 0.018,
@@ -237,9 +305,15 @@ export function applyOutlineResidualEscalation(image, alphaMap, options = {}) {
   });
   const afterGlobal = measurePostCleanupResidual(candidate, alphaMap);
   const improvement = gate.outline.score > 1e-6 ? (gate.outline.score - afterOutline.score) / gate.outline.score : 0;
+  const minImprovement = gate.partialSceneProtected
+    ? (options.partialMinImprovement ?? Math.min(options.minImprovement ?? 0.035, 0.025))
+    : (options.minImprovement ?? 0.035);
+  const maxOutlineRatio = gate.partialSceneProtected
+    ? (options.partialMaxOutlineRatio ?? 0.98)
+    : (options.maxOutlineRatio ?? 0.965);
   const accepted = candidate.correctedPixels >= (options.minCorrectedPixels ?? 6)
-    && improvement >= (options.minImprovement ?? 0.035)
-    && afterOutline.score <= gate.outline.score * (options.maxOutlineRatio ?? 0.965)
+    && improvement >= minImprovement
+    && afterOutline.score <= gate.outline.score * maxOutlineRatio
     && afterGlobal.total <= beforeGlobal.total * 1.005 + (options.maxTotalIncrease ?? 0.05)
     && afterGlobal.luma <= beforeGlobal.luma * 1.008 + (options.maxLumaIncrease ?? 0.05)
     && afterGlobal.chroma <= beforeGlobal.chroma * 1.006 + (options.maxChromaIncrease ?? 0.45);
@@ -261,6 +335,13 @@ export function applyOutlineResidualEscalation(image, alphaMap, options = {}) {
       candidateCorrectedPixels: candidate.correctedPixels,
       guardedPixels: candidate.guardedPixels,
       meanBlend: accepted ? candidate.meanBlend : 0,
+      candidateMeanBlend: candidate.meanBlend,
+      effectiveStrength: candidate.effectiveStrength,
+      effectiveMaxBlend: candidate.effectiveMaxBlend,
+      effectiveMaxLumaDelta: candidate.effectiveMaxLumaDelta,
+      effectiveHardSceneGuard: candidate.effectiveHardSceneGuard,
+      minImprovement,
+      maxOutlineRatio,
       beforeGlobal,
       afterGlobal: accepted ? afterGlobal : beforeGlobal,
       candidateAfterGlobal: afterGlobal
