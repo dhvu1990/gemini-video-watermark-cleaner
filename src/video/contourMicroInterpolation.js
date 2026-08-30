@@ -84,7 +84,10 @@ function buildCandidate(image, alphaMap, options = {}) {
   let correctedPixels = 0;
   let guardedPixels = 0;
   let missingAnchors = 0;
+  let contourCandidates = 0;
   let blendSum = 0;
+  let localBeforeResidualSum = 0;
+  let localAfterResidualSum = 0;
 
   for (let y = 2; y < image.height - 2; y++) {
     for (let x = 2; x < image.width - 2; x++) {
@@ -94,6 +97,7 @@ function buildCandidate(image, alphaMap, options = {}) {
       const gradient = alphaGradient(alphaMap, image.width, image.height, x, y);
       const contourWeight = smoothstep(options.minAlphaGradient ?? 0.006, options.fullAlphaGradient ?? 0.055, gradient.magnitude);
       if (contourWeight < 0.08) continue;
+      contourCandidates++;
 
       const scene = sceneEdgeProtectionAt(image, alphaMap, x, y, options.sceneEdgeOptions || {});
       if (scene.weight >= hardSceneGuard) {
@@ -122,14 +126,25 @@ function buildCandidate(image, alphaMap, options = {}) {
       const delta = clamp(residual, -maxLumaDelta, maxLumaDelta) * blend;
       const idx = p * 4;
       const chromaBlend = Math.min(0.08, blend * 0.20);
+      const next = [0, 0, 0];
       for (let c = 0; c < 3; c++) {
         const lumaAdjusted = current[c] + delta;
-        data[idx + c] = clampByte(lumaAdjusted + (prediction.target[c] - lumaAdjusted) * chromaBlend);
+        next[c] = clampByte(lumaAdjusted + (prediction.target[c] - lumaAdjusted) * chromaBlend);
+        data[idx + c] = next[c];
       }
       correctedPixels++;
       blendSum += blend;
+      localBeforeResidualSum += Math.abs(targetY - currentY);
+      localAfterResidualSum += Math.abs(targetY - luma(next));
     }
   }
+
+  const localBeforeResidual = correctedPixels ? localBeforeResidualSum / correctedPixels : 0;
+  const localAfterResidual = correctedPixels ? localAfterResidualSum / correctedPixels : 0;
+  const localImprovement = localBeforeResidual > 1e-9
+    ? (localBeforeResidual - localAfterResidual) / localBeforeResidual
+    : 0;
+  const guardedFraction = contourCandidates ? guardedPixels / contourCandidates : 0;
 
   return {
     width: image.width,
@@ -138,7 +153,12 @@ function buildCandidate(image, alphaMap, options = {}) {
     correctedPixels,
     guardedPixels,
     missingAnchors,
+    contourCandidates,
+    guardedFraction,
     meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
+    localBeforeResidual,
+    localAfterResidual,
+    localImprovement,
     hardSceneGuard,
     strength,
     maxBlend,
@@ -168,6 +188,7 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
         eligible,
         attempted: false,
         accepted: false,
+        acceptanceMode: 'ineligible',
         beforeOutline,
         afterOutline: beforeOutline,
         beforeGlobal,
@@ -184,16 +205,31 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
     ? (beforeOutline.score - afterOutline.score) / beforeOutline.score
     : 0;
   const minCorrectedPixels = Math.max(4, Math.round(Number(options.minCorrectedPixels ?? 6)));
-  const minImprovement = Number.isFinite(options.minImprovement) ? options.minImprovement : 0.006;
-  const maxOutlineRatio = Number.isFinite(options.maxOutlineRatio) ? options.maxOutlineRatio : 0.994;
+  const minImprovement = Number.isFinite(options.minImprovement) ? options.minImprovement : 0.003;
+  const maxOutlineRatio = Number.isFinite(options.maxOutlineRatio) ? options.maxOutlineRatio : 0.997;
   const maxMeanBlend = Number.isFinite(options.maxMeanBlend) ? options.maxMeanBlend : 0.28;
-  const accepted = candidate.correctedPixels >= minCorrectedPixels
+  const localMinImprovement = Number.isFinite(options.localMinImprovement) ? options.localMinImprovement : 0.10;
+  const localMaxGuardedFraction = Number.isFinite(options.localMaxGuardedFraction) ? options.localMaxGuardedFraction : 0.72;
+  const localMaxMeanBlend = Number.isFinite(options.localMaxMeanBlend) ? options.localMaxMeanBlend : 0.24;
+
+  const enoughPixels = candidate.correctedPixels >= minCorrectedPixels;
+  const globalSafe = afterGlobal.total <= beforeGlobal.total * 1.004 + 0.03
+    && afterGlobal.luma <= beforeGlobal.luma * 1.005 + 0.03
+    && afterGlobal.chroma <= beforeGlobal.chroma * 1.004 + 0.25;
+  const standardAccepted = enoughPixels
     && candidate.meanBlend <= maxMeanBlend
     && improvement >= minImprovement
     && afterOutline.score <= beforeOutline.score * maxOutlineRatio
-    && afterGlobal.total <= beforeGlobal.total * 1.004 + 0.03
-    && afterGlobal.luma <= beforeGlobal.luma * 1.005 + 0.03
-    && afterGlobal.chroma <= beforeGlobal.chroma * 1.004 + 0.25;
+    && globalSafe;
+  const localBandAccepted = !standardAccepted
+    && enoughPixels
+    && candidate.meanBlend <= localMaxMeanBlend
+    && candidate.localImprovement >= localMinImprovement
+    && candidate.guardedFraction <= localMaxGuardedFraction
+    && afterOutline.score <= beforeOutline.score
+    && globalSafe;
+  const accepted = standardAccepted || localBandAccepted;
+  const acceptanceMode = standardAccepted ? 'outline-wide' : (localBandAccepted ? 'local-band' : 'rejected');
 
   return {
     width: image.width,
@@ -203,6 +239,10 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
       eligible,
       attempted: true,
       accepted,
+      acceptanceMode,
+      standardAccepted,
+      localBandAccepted,
+      globalSafe,
       beforeOutline,
       afterOutline: accepted ? afterOutline : beforeOutline,
       candidateAfterOutline: afterOutline,
@@ -214,13 +254,21 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
       correctedPixels: accepted ? candidate.correctedPixels : 0,
       candidateCorrectedPixels: candidate.correctedPixels,
       guardedPixels: candidate.guardedPixels,
+      contourCandidates: candidate.contourCandidates,
+      guardedFraction: candidate.guardedFraction,
       missingAnchors: candidate.missingAnchors,
       meanBlend: accepted ? candidate.meanBlend : 0,
       candidateMeanBlend: candidate.meanBlend,
+      localBeforeResidual: candidate.localBeforeResidual,
+      localAfterResidual: candidate.localAfterResidual,
+      localImprovement: candidate.localImprovement,
       minCorrectedPixels,
       minImprovement,
       maxOutlineRatio,
       maxMeanBlend,
+      localMinImprovement,
+      localMaxGuardedFraction,
+      localMaxMeanBlend,
       hardSceneGuard: candidate.hardSceneGuard,
       strength: candidate.strength,
       maxBlend: candidate.maxBlend,
