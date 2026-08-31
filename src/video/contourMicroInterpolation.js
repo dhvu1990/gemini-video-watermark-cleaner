@@ -69,8 +69,43 @@ function outlineOptions(options = {}) {
   };
 }
 
+function localTextureEnergy(image, x, y) {
+  const center = luma(rgbAt(image, x, y));
+  let total = 0;
+  let samples = 0;
+  for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]]) {
+    const xx = x + ox;
+    const yy = y + oy;
+    if (xx < 0 || yy < 0 || xx >= image.width || yy >= image.height) continue;
+    total += Math.abs(center - luma(rgbAt(image, xx, yy)));
+    samples++;
+  }
+  return samples ? total / samples : 0;
+}
+
+function measureTexturePreservation(beforeImage, candidateImage, correctedMask) {
+  let beforeSum = 0;
+  let afterSum = 0;
+  let samples = 0;
+  for (let y = 1; y < beforeImage.height - 1; y++) {
+    for (let x = 1; x < beforeImage.width - 1; x++) {
+      const p = y * beforeImage.width + x;
+      if (!correctedMask[p]) continue;
+      beforeSum += localTextureEnergy(beforeImage, x, y);
+      afterSum += localTextureEnergy(candidateImage, x, y);
+      samples++;
+    }
+  }
+  const beforeEnergy = samples ? beforeSum / samples : 0;
+  const afterEnergy = samples ? afterSum / samples : 0;
+  const ratio = beforeEnergy > 1e-6 ? afterEnergy / beforeEnergy : 1;
+  const drift = beforeEnergy > 1e-6 ? Math.abs(afterEnergy - beforeEnergy) / beforeEnergy : 0;
+  return { samples, beforeEnergy, afterEnergy, ratio, drift };
+}
+
 function buildCandidate(image, alphaMap, options = {}) {
   const data = new Uint8ClampedArray(image.data);
+  const correctedMask = new Uint8Array(image.width * image.height);
   const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.018;
   const maxAlpha = Number.isFinite(options.maxAlpha) ? options.maxAlpha : 0.28;
   const hardSceneGuard = Number.isFinite(options.hardSceneGuard) ? options.hardSceneGuard : 0.40;
@@ -132,6 +167,7 @@ function buildCandidate(image, alphaMap, options = {}) {
         next[c] = clampByte(lumaAdjusted + (prediction.target[c] - lumaAdjusted) * chromaBlend);
         data[idx + c] = next[c];
       }
+      correctedMask[p] = 1;
       correctedPixels++;
       blendSum += blend;
       localBeforeResidualSum += Math.abs(targetY - currentY);
@@ -139,12 +175,14 @@ function buildCandidate(image, alphaMap, options = {}) {
     }
   }
 
+  const candidateImage = { width: image.width, height: image.height, data };
   const localBeforeResidual = correctedPixels ? localBeforeResidualSum / correctedPixels : 0;
   const localAfterResidual = correctedPixels ? localAfterResidualSum / correctedPixels : 0;
   const localImprovement = localBeforeResidual > 1e-9
     ? (localBeforeResidual - localAfterResidual) / localBeforeResidual
     : 0;
   const guardedFraction = contourCandidates ? guardedPixels / contourCandidates : 0;
+  const texture = measureTexturePreservation(image, candidateImage, correctedMask);
 
   return {
     width: image.width,
@@ -159,6 +197,7 @@ function buildCandidate(image, alphaMap, options = {}) {
     localBeforeResidual,
     localAfterResidual,
     localImprovement,
+    texture,
     hardSceneGuard,
     strength,
     maxBlend,
@@ -211,11 +250,24 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
   const localMinImprovement = Number.isFinite(options.localMinImprovement) ? options.localMinImprovement : 0.10;
   const localMaxGuardedFraction = Number.isFinite(options.localMaxGuardedFraction) ? options.localMaxGuardedFraction : 0.72;
   const localMaxMeanBlend = Number.isFinite(options.localMaxMeanBlend) ? options.localMaxMeanBlend : 0.24;
+  const textureMinEnergy = Number.isFinite(options.textureMinEnergy) ? options.textureMinEnergy : 4.5;
+  const textureMinImprovement = Number.isFinite(options.textureMinImprovement) ? options.textureMinImprovement : 0.08;
+  const textureMinEnergyRatio = Number.isFinite(options.textureMinEnergyRatio) ? options.textureMinEnergyRatio : 0.72;
+  const textureMaxEnergyRatio = Number.isFinite(options.textureMaxEnergyRatio) ? options.textureMaxEnergyRatio : 1.18;
+  const textureMaxGuardedFraction = Number.isFinite(options.textureMaxGuardedFraction) ? options.textureMaxGuardedFraction : 0.65;
+  const textureMaxMeanBlend = Number.isFinite(options.textureMaxMeanBlend) ? options.textureMaxMeanBlend : 0.22;
 
   const enoughPixels = candidate.correctedPixels >= minCorrectedPixels;
   const globalSafe = afterGlobal.total <= beforeGlobal.total * 1.004 + 0.03
     && afterGlobal.luma <= beforeGlobal.luma * 1.005 + 0.03
     && afterGlobal.chroma <= beforeGlobal.chroma * 1.004 + 0.25;
+  const textureGlobalSafe = afterGlobal.total <= beforeGlobal.total * 1.004 + 0.03
+    && afterGlobal.luma <= beforeGlobal.luma * 1.008 + 0.05
+    && afterGlobal.chroma <= beforeGlobal.chroma * 1.004 + 0.25;
+  const roughTexture = candidate.texture.beforeEnergy >= textureMinEnergy;
+  const texturePreserved = candidate.texture.ratio >= textureMinEnergyRatio
+    && candidate.texture.ratio <= textureMaxEnergyRatio;
+
   const standardAccepted = enoughPixels
     && candidate.meanBlend <= maxMeanBlend
     && improvement >= minImprovement
@@ -228,8 +280,20 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
     && candidate.guardedFraction <= localMaxGuardedFraction
     && afterOutline.score <= beforeOutline.score
     && globalSafe;
-  const accepted = standardAccepted || localBandAccepted;
-  const acceptanceMode = standardAccepted ? 'outline-wide' : (localBandAccepted ? 'local-band' : 'rejected');
+  const textureSafeAccepted = !standardAccepted
+    && !localBandAccepted
+    && roughTexture
+    && enoughPixels
+    && candidate.meanBlend <= textureMaxMeanBlend
+    && candidate.localImprovement >= textureMinImprovement
+    && candidate.guardedFraction <= textureMaxGuardedFraction
+    && texturePreserved
+    && afterOutline.score <= beforeOutline.score * 1.002
+    && textureGlobalSafe;
+  const accepted = standardAccepted || localBandAccepted || textureSafeAccepted;
+  const acceptanceMode = standardAccepted
+    ? 'outline-wide'
+    : (localBandAccepted ? 'local-band' : (textureSafeAccepted ? 'texture-safe' : 'rejected'));
 
   return {
     width: image.width,
@@ -242,7 +306,11 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
       acceptanceMode,
       standardAccepted,
       localBandAccepted,
+      textureSafeAccepted,
       globalSafe,
+      textureGlobalSafe,
+      roughTexture,
+      texturePreserved,
       beforeOutline,
       afterOutline: accepted ? afterOutline : beforeOutline,
       candidateAfterOutline: afterOutline,
@@ -262,6 +330,11 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
       localBeforeResidual: candidate.localBeforeResidual,
       localAfterResidual: candidate.localAfterResidual,
       localImprovement: candidate.localImprovement,
+      textureBeforeEnergy: candidate.texture.beforeEnergy,
+      textureAfterEnergy: candidate.texture.afterEnergy,
+      textureEnergyRatio: candidate.texture.ratio,
+      textureEnergyDrift: candidate.texture.drift,
+      textureSamples: candidate.texture.samples,
       minCorrectedPixels,
       minImprovement,
       maxOutlineRatio,
@@ -269,6 +342,12 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
       localMinImprovement,
       localMaxGuardedFraction,
       localMaxMeanBlend,
+      textureMinEnergy,
+      textureMinImprovement,
+      textureMinEnergyRatio,
+      textureMaxEnergyRatio,
+      textureMaxGuardedFraction,
+      textureMaxMeanBlend,
       hardSceneGuard: candidate.hardSceneGuard,
       strength: candidate.strength,
       maxBlend: candidate.maxBlend,
