@@ -58,12 +58,15 @@ test('internal residual rescue can reduce an isolated bright watermark highlight
     highlightResidual: 8,
     maxLumaDelta: 16,
     maxBlend: 0.36,
+    maxMeanBlend: 0.42,
+    minPeakImprovement: 0.04,
     strength: 0.42
   });
 
   assert.equal(result.internalResidualRescue.attempted, true);
   assert.equal(result.internalResidualRescue.accepted, true);
   assert.ok(result.internalResidualRescue.correctedPixels > 0);
+  assert.ok(result.internalResidualRescue.candidateMeanBlend <= 0.42);
   assert.ok(result.data[p] < image.data[p]);
   assert.ok(result.internalResidualRescue.after.maxResidual < result.internalResidualRescue.before.maxResidual);
 });
