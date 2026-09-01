@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { applyContourMicroInterpolation } from '../src/video/contourMicroInterpolation.js';
+import { applyContourMicroInterpolation, buildContourSafetyBand } from '../src/video/contourMicroInterpolation.js';
 
 function flatImage(width = 24, height = 24, value = 90) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -25,13 +25,29 @@ test('micro interpolation is a no-op when no contour residual is present', () =>
   assert.deepEqual([...result.data], [...image.data]);
 });
 
-test('micro interpolation uses two-sided contour-normal anchors and local scene protection', () => {
+test('contour safety band expands beyond faint alpha and boosts four tips', () => {
+  const width = 72, height = 72;
+  const alphaMap = new Float32Array(width * height);
+  for (let y = 18; y <= 53; y++) {
+    const half = Math.max(1, Math.round((18 - Math.abs(y - 35.5)) * 0.85));
+    for (let x = 36 - half; x <= 36 + half; x++) alphaMap[y * width + x] = 0.08;
+  }
+  const band = buildContourSafetyBand(alphaMap, width, height);
+  assert.ok(band.baseRadius >= 3);
+  assert.ok(band.tipExtraRadius >= 1);
+  assert.ok(band.pixels > 0);
+  assert.ok(band.weight[15 * width + 36] > 0, 'top tip receives an expanded safety band');
+  assert.ok(band.guardAlpha[15 * width + 36] > 0, 'expanded band participates in scene protection and anchor exclusion');
+});
+
+test('micro interpolation uses safety-band-aware anchors and local scene protection', () => {
   const source = readFileSync(new URL('../src/video/contourMicroInterpolation.js', import.meta.url), 'utf8');
-  assert.match(source, /alphaGradient\(alphaMap/);
-  assert.match(source, /cleanAnchor\(image, alphaMap, x, y, nx, ny, -1/);
-  assert.match(source, /cleanAnchor\(image, alphaMap, x, y, nx, ny, 1/);
-  assert.match(source, /sceneEdgeProtectionAt\(image, alphaMap, x, y/);
-  assert.match(source, /hardSceneGuard/);
+  assert.match(source, /buildContourSafetyBand/);
+  assert.match(source, /alphaGradient\(safety\.guardAlpha/);
+  assert.match(source, /cleanAnchor\(image, guideAlpha/);
+  assert.match(source, /sceneEdgeProtectionAt\(image, safety\.guardAlpha, x, y/);
+  assert.match(source, /safetyBandCorrectedPixels/);
+  assert.match(source, /maxRescuePasses/);
 });
 
 test('micro interpolation keeps conservative local and global rollback checks', () => {
