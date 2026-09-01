@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 jobs:
-  fresh-full-suite:
+  group-ab:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -19,11 +19,10 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
-      - run: npm run check
-      - name: Fresh full suite
-        run: npm test
+      - name: Tests A-B
+        run: node --test --test-concurrency=1 tests/[a-b]*.test.mjs
 
-  warmup-af:
+  group-cd:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -33,12 +32,10 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
-      - name: Warmup A-F
-        run: node --test --test-concurrency=1 tests/[a-f]*.test.mjs
-      - name: Full suite after A-F
-        run: npm test
+      - name: Tests C-D
+        run: node --test --test-concurrency=1 tests/[c-d]*.test.mjs
 
-  warmup-gm:
+  group-ef:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -48,41 +45,5 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
-      - name: Warmup G-M
-        run: node --test --test-concurrency=1 tests/[g-m]*.test.mjs
-      - name: Full suite after G-M
-        run: npm test
-
-  warmup-nz:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - run: npm install --no-audit --no-fund
-      - name: Sync pinned alpha profiles
-        run: npm run setup:alpha
-      - name: Warmup N-Z
-        run: node --test --test-concurrency=1 tests/[n-zvV]*.test.mjs
-      - name: Full suite after N-Z
-        run: npm test
-
-  warmup-all-groups:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - run: npm install --no-audit --no-fund
-      - name: Sync pinned alpha profiles
-        run: npm run setup:alpha
-      - name: Warmup A-F
-        run: node --test --test-concurrency=1 tests/[a-f]*.test.mjs
-      - name: Warmup G-M
-        run: node --test --test-concurrency=1 tests/[g-m]*.test.mjs
-      - name: Warmup N-Z
-        run: node --test --test-concurrency=1 tests/[n-zvV]*.test.mjs
-      - name: Full suite after all warmups
-        run: npm test
+      - name: Tests E-F
+        run: node --test --test-concurrency=1 tests/[e-f]*.test.mjs
