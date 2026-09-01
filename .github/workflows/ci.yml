@@ -20,5 +20,11 @@ jobs:
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
       - run: npm run check
+      - name: Focused test - internal residual rescue
+        run: node --test tests/internalResidualRescue.test.mjs
+      - name: Focused test - structured smooth rescue
+        run: node --test tests/structuredSmoothRescue.test.mjs
+      - name: Focused test - batch preview model
+        run: node --test tests/batchPreviewModel.test.mjs
       - run: npm test
       - run: npm run build
