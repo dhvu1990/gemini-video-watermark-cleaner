@@ -10,6 +10,7 @@ import {
 } from '../src/video/textureRepair.js';
 import { applyNormalEdgeBridge } from '../src/video/edgeBridge.js';
 import { applyDualRingLumaFinish } from '../src/video/dualRingFinish.js';
+import { applyStructuredSmoothRescue } from '../src/video/structuredSmoothRescue.js';
 
 function image(width, height, fn) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -40,7 +41,7 @@ function innerAlpha(size) {
   return alpha;
 }
 
-test('anti-streak runtime summary is diagnostic-only and preserves the existing no-history pixel pipeline', () => {
+test('anti-streak runtime summary is diagnostic-only and preserves the current no-history pixel pipeline', () => {
   const width = 36;
   const height = 36;
   const size = 13;
@@ -60,6 +61,21 @@ test('anti-streak runtime summary is diagnostic-only and preserves the existing 
   reference = applyPaddedTextureRepair(reference, paddedAlpha, 0.68);
   reference = applyNormalEdgeBridge(reference, paddedAlpha, 0.90);
   reference = applyDualRingLumaFinish(reference, paddedAlpha, { strength: 0.56 });
+
+  const structuredReference = applyStructuredSmoothRescue(
+    reference,
+    paddedAlpha,
+    reference.smoothBackground || reference.dualRingFinish?.smoothBackground || {},
+    reference.structuredRing || reference.dualRingFinish?.structuredRing || {}
+  );
+  if (structuredReference.structuredSmoothRescue?.accepted) {
+    reference = {
+      ...reference,
+      width: structuredReference.width,
+      height: structuredReference.height,
+      data: structuredReference.data
+    };
+  }
 
   const result = repairPaddedRegion(padded, inner, alpha, 1, 0.35, [], false);
   const referenceCleaned = cropRegion(reference, inner.offsetX, inner.offsetY, inner.width, inner.height);

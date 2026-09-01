@@ -19,6 +19,8 @@ export function batchBackgroundLabel(preview = null) {
   const outline = rescue?.outlineResidualEscalation || null;
   const partial = outline?.partialSceneProtected === true;
   const contourOverride = outline?.contourBodyOverride === true;
+  if (rescueMode?.includes('internal-residual') && rescueMode?.includes('contour-micro-interpolation')) return 'Contour + internal ghost/highlight rescue';
+  if (rescueMode?.includes('internal-residual')) return 'Internal ghost/highlight rescue';
   if (rescueMode?.includes('contour-micro-interpolation')) return 'Contour micro-interpolation finishing';
   if (rescueMode?.includes('outline-escalation') && partial && contourOverride) return 'Protected contour-only outline rescue';
   if (rescueMode?.includes('outline-escalation') && partial) return 'Partial scene-protected outline rescue';
@@ -100,6 +102,30 @@ function microInterpolationRiskFlags(preview = null) {
       flags.push('micro-reject-outline-ratio');
     }
   }
+  return flags;
+}
+
+function internalResidualRiskFlags(preview = null) {
+  const internal = preview?.structuredSmoothRescue?.internalResidualRescue || null;
+  if (!internal) return [];
+  const flags = [];
+  if (internal.accepted) {
+    flags.push('internal-residual-rescue-accepted');
+    if (String(internal.acceptedMode || '').includes('highlight')) flags.push('internal-highlight-residual-accepted');
+    if (String(internal.acceptedMode || '').includes('ghost')) flags.push('internal-ghost-residual-accepted');
+  } else if (internal.attempted) {
+    flags.push('internal-residual-rescue-rejected');
+    if (internal.globalSafe === false) flags.push('internal-reject-global-safety');
+    if (finite(internal.candidateCorrectedPixels, 0) <= 0) flags.push('internal-reject-no-candidate-pixels');
+    if (finite(internal.candidateMeanBlend, 0) > 0.30) flags.push('internal-reject-mean-blend');
+  }
+  const before = internal.before || {};
+  const after = internal.accepted ? (internal.after || before) : before;
+  const score = Math.max(0, finite(after.score, 0));
+  const density = Math.max(0, finite(after.candidateDensity, 0));
+  const peak = Math.max(0, finite(after.maxResidual, 0));
+  const highPixels = Math.max(0, Math.round(finite(after.highResidualPixels, 0)));
+  if ((score >= 1.25 && density >= 0.04) || (peak >= 9 && highPixels >= 1)) flags.push('post-chain-internal-watermark-residual');
   return flags;
 }
 
@@ -188,7 +214,8 @@ export function buildBatchDetectionView(detection = null, preview = null) {
     ...existingFlags,
     ...finalVisualRiskFlags(preview),
     ...outlineResidualRiskFlags(preview),
-    ...microInterpolationRiskFlags(preview)
+    ...microInterpolationRiskFlags(preview),
+    ...internalResidualRiskFlags(preview)
   ])];
 
   return {

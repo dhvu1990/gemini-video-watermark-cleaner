@@ -8,6 +8,7 @@ import {
 } from './protectedResidualRescue.js';
 import { applyOutlineResidualEscalation } from './outlineResidualEscalation.js';
 import { applyContourMicroInterpolation } from './contourMicroInterpolation.js';
+import { applyInternalResidualRescue } from './internalResidualRescue.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
@@ -143,6 +144,28 @@ function microInterpolationOptions(options = {}) {
   };
 }
 
+function internalResidualOptions(options = {}) {
+  return {
+    enabled: options.internalResidualRescueEnabled !== false,
+    minAlpha: finite(options.internalResidualMinAlpha, 0.12),
+    maxAlpha: finite(options.internalResidualMaxAlpha, 0.78),
+    minScore: finite(options.internalResidualMinScore, 1.30),
+    minDensity: finite(options.internalResidualMinDensity, 0.045),
+    minSamples: Math.max(8, Math.round(finite(options.internalResidualMinSamples, 10))),
+    minSectors: Math.max(2, Math.round(finite(options.internalResidualMinSectors, 2))),
+    minSignConsistency: finite(options.internalResidualMinSignConsistency, 0.56),
+    minHighlightPixels: Math.max(1, Math.round(finite(options.internalResidualMinHighlightPixels, 2))),
+    minHighlightResidual: finite(options.internalResidualMinHighlightResidual, 9.0),
+    strength: finite(options.internalResidualStrength, 0.34),
+    maxBlend: finite(options.internalResidualMaxBlend, 0.30),
+    maxLumaDelta: finite(options.internalResidualMaxLumaDelta, 12),
+    hardSceneGuard: finite(options.internalResidualHardSceneGuard, 0.54),
+    highlightHardSceneGuard: finite(options.internalResidualHighlightHardSceneGuard, 0.86),
+    sceneEdgeOptions: options.sceneEdgeOptions || {},
+    ...(options.internalResidualRescueOptions || {})
+  };
+}
+
 function measurePostChainOutlineResidual(image, alphaMap, options = {}) {
   const outlineOptions = outlineEscalationOptions(options);
   const residual = measureGeometricOutlineResidual(image, alphaMap, {
@@ -256,7 +279,18 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted || contourMicroInterpolationAccepted;
+  const internalCandidate = applyInternalResidualRescue(selected, alphaMap, internalResidualOptions(options));
+  const internalResidualRescue = internalCandidate.internalResidualRescue || null;
+  const internalResidualAccepted = Boolean(internalResidualRescue?.accepted);
+  if (internalResidualAccepted) {
+    selected = {
+      width: internalCandidate.width,
+      height: internalCandidate.height,
+      data: new Uint8ClampedArray(internalCandidate.data)
+    };
+  }
+
+  const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted || contourMicroInterpolationAccepted || internalResidualAccepted;
   let acceptedMode = 'none';
   if (outlineEscalationAccepted) {
     if (structuredAccepted && finalAccepted) acceptedMode = 'structured-smooth+final-visual+outline-escalation';
@@ -273,6 +307,11 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       ? 'contour-micro-interpolation'
       : `${acceptedMode}+contour-micro-interpolation`;
   }
+  if (internalResidualAccepted) {
+    acceptedMode = acceptedMode === 'none'
+      ? 'internal-residual-rescue'
+      : `${acceptedMode}+internal-residual`;
+  }
 
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
@@ -288,7 +327,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       attempted: structuredAttempted
         || Boolean(finalVisualResidual?.attempted)
         || Boolean(outlineResidualEscalation?.attempted)
-        || Boolean(contourMicroInterpolation?.attempted),
+        || Boolean(contourMicroInterpolation?.attempted)
+        || Boolean(internalResidualRescue?.attempted),
       accepted,
       acceptedMode,
       structuredAttempted,
@@ -297,6 +337,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       finalVisualAccepted: finalAccepted,
       outlineEscalationAccepted,
       contourMicroInterpolationAccepted,
+      internalResidualAccepted,
       ...gate,
       beforeGlobal,
       afterGlobal: finalGlobal,
@@ -314,6 +355,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       finalVisualResidual,
       outlineResidualEscalation,
       contourMicroInterpolation,
+      internalResidualRescue,
       postChainOutlineResidual,
       postChainOutlineSceneSafe
     }
