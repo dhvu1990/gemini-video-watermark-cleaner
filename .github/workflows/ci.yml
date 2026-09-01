@@ -26,5 +26,9 @@ jobs:
         run: node --test tests/structuredSmoothRescue.test.mjs
       - name: Focused test - batch preview model
         run: node --test tests/batchPreviewModel.test.mjs
+      - name: Legacy tests A-M
+        run: node --test tests/[a-m]*.test.mjs
+      - name: Legacy tests N-Z
+        run: node --test tests/[n-zvV]*.test.mjs
       - run: npm test
       - run: npm run build
