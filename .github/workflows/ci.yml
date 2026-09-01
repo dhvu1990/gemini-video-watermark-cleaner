@@ -9,8 +9,20 @@ permissions:
   contents: read
 
 jobs:
-  group-a:
+  isolate-a-file:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        file:
+          - adaptiveAlphaUnderflowCap.test.mjs
+          - adaptiveFinish.test.mjs
+          - alpha-edge.test.mjs
+          - analysisPolicy.test.mjs
+          - antiStreakDiagnostics.test.mjs
+          - antiStreakRuntimeIntegration.test.mjs
+          - antiStreakTelemetryFormat.test.mjs
+    name: "A file - ${{ matrix.file }}"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -19,18 +31,5 @@ jobs:
       - run: npm install --no-audit --no-fund
       - name: Sync pinned alpha profiles
         run: npm run setup:alpha
-      - name: Tests A
-        run: node --test --test-concurrency=1 tests/a*.test.mjs
-
-  group-b:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-      - run: npm install --no-audit --no-fund
-      - name: Sync pinned alpha profiles
-        run: npm run setup:alpha
-      - name: Tests B
-        run: node --test --test-concurrency=1 tests/b*.test.mjs
+      - name: Run isolated test file
+        run: node --test --test-concurrency=1 "tests/${{ matrix.file }}"
