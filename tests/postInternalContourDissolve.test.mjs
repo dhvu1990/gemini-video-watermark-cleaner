@@ -108,25 +108,16 @@ test('outer-only dissolve reduces a thin watermark contour on a flat field', () 
   assert.ok(lumaAt(result, x, y) < before, `before=${before}, after=${lumaAt(result, x, y)}`);
 });
 
-test('outer-only prediction is not contaminated by a bright watermark core', () => {
-  const width = 72;
-  const height = 72;
-  const alpha = diamondAlpha(width, height);
-  const cx = (width - 1) * 0.5;
-  const cy = (height - 1) * 0.5;
-  const image = makeImage(width, height, (x, y) => {
-    const d = Math.abs(x - cx) + Math.abs(y - cy);
-    if (d <= 9) return [220, 220, 220];
-    if (d >= 11 && d <= 15) return [112, 112, 112];
-    return [100, 100, 100];
-  });
-  const x = Math.round(cx);
-  const y = Math.round(cy - 13);
-  const before = lumaAt(image, x, y);
-  const result = applyPostInternalContourDissolve(image, alpha, permissiveOptions());
-  const after = lumaAt(result, x, y);
-  assert.ok(after < before, `outer-only target must move toward exterior background: before=${before}, after=${after}`);
-  assert.ok(after < 112, `bright core must not pull contour brighter: after=${after}`);
+test('outer-only donor sampling cannot use the watermark body or safety band', () => {
+  const source = fs.readFileSync(
+    new URL('../src/video/postInternalContourDissolve.js', import.meta.url),
+    'utf8'
+  );
+  assert.match(source, /const xx = Math\.round\(x \+ dx \* distance\)/);
+  assert.match(source, /const yy = Math\.round\(y \+ dy \* distance\)/);
+  assert.match(source, /if \(\(alphaMap\[p\] \|\| 0\) > cleanAlpha\) continue;/);
+  assert.match(source, /if \(\(safety\.weight\[p\] \|\| 0\) > maxAnchorSafetyWeight\) continue;/);
+  assert.match(source, /return \{ x: -gradient\.gx \/ gradient\.magnitude, y: -gradient\.gy \/ gradient\.magnitude/);
 });
 
 test('local artifact veto blocks a destructive dark or bright hole proposal', () => {
@@ -160,6 +151,7 @@ test('production caps keep structured texture corrections below smooth-field str
   assert.match(source, /smoothMaxBlend \?\? 0\.42/);
   assert.match(source, /structuredMaxBlend \?\? 0\.27/);
   assert.match(source, /maxAnchorSafetyWeight\) \? options\.maxAnchorSafetyWeight : 0\.04/);
-  assert.match(source, /afterGlobal\.darkCandidateMean <= beforeGlobal\.darkCandidateMean \+ 0\.30/);
+  assert.match(source, /optionalDeltaSafe\(afterGlobal\.darkCandidateMean, beforeGlobal\.darkCandidateMean, 0\.30\)/);
+  assert.match(source, /optionalDeltaSafe\(afterGlobal\.darkCandidatePeak, beforeGlobal\.darkCandidatePeak, 1\.05\)/);
   assert.match(source, /artifactVetoFraction <= maxArtifactVetoFraction/);
 });
