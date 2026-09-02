@@ -166,6 +166,40 @@ function internalResidualOptions(options = {}) {
   };
 }
 
+function postInternalContourOptions(options = {}) {
+  return {
+    enabled: options.postInternalContourEnabled !== false,
+    minScore: finite(options.postInternalContourMinScore, 0.72),
+    minDensity: finite(options.postInternalContourMinDensity, 0.025),
+    minSamples: Math.max(8, Math.round(finite(options.postInternalContourMinSamples, 8))),
+    minSectors: Math.max(2, Math.round(finite(options.postInternalContourMinSectors, 2))),
+    minAlpha: finite(options.postInternalContourMinAlpha, 0.010),
+    maxAlpha: finite(options.postInternalContourMaxAlpha, 0.42),
+    cleanAlpha: finite(options.postInternalContourCleanAlpha, 0.010),
+    maxRadius: Math.max(6, Math.round(finite(options.postInternalContourMaxRadius, 16))),
+    hardSceneGuard: finite(options.postInternalContourHardSceneGuard, 0.44),
+    strength: finite(options.postInternalContourStrength, 0.50),
+    maxBlend: finite(options.postInternalContourMaxBlend, 0.36),
+    maxLumaDelta: finite(options.postInternalContourMaxLumaDelta, 9),
+    safetyStrength: finite(options.postInternalContourSafetyStrength, 0.46),
+    safetyMaxBlend: finite(options.postInternalContourSafetyMaxBlend, 0.36),
+    residualSoft: finite(options.postInternalContourResidualSoft, 0.38),
+    residualHard: finite(options.postInternalContourResidualHard, 3.0),
+    safetyResidualSoft: finite(options.postInternalContourSafetyResidualSoft, 0.32),
+    safetyResidualHard: finite(options.postInternalContourSafetyResidualHard, 2.6),
+    minCorrectedPixels: Math.max(4, Math.round(finite(options.postInternalContourMinCorrectedPixels, 4))),
+    minImprovement: finite(options.postInternalContourMinImprovement, 0.002),
+    maxOutlineRatio: finite(options.postInternalContourMaxOutlineRatio, 0.998),
+    maxMeanBlend: finite(options.postInternalContourMaxMeanBlend, 0.32),
+    localMinImprovement: finite(options.postInternalContourLocalMinImprovement, 0.07),
+    localMaxGuardedFraction: finite(options.postInternalContourLocalMaxGuardedFraction, 0.80),
+    localMaxMeanBlend: finite(options.postInternalContourLocalMaxMeanBlend, 0.30),
+    maxRescuePasses: Math.max(1, Math.min(2, Math.round(finite(options.postInternalContourMaxRescuePasses, 2)))),
+    sceneEdgeOptions: options.sceneEdgeOptions || {},
+    ...(options.postInternalContourOptions || {})
+  };
+}
+
 function measurePostChainOutlineResidual(image, alphaMap, options = {}) {
   const outlineOptions = outlineEscalationOptions(options);
   const residual = measureGeometricOutlineResidual(image, alphaMap, {
@@ -290,7 +324,23 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  const accepted = structuredAccepted || finalAccepted || outlineEscalationAccepted || contourMicroInterpolationAccepted || internalResidualAccepted;
+  const postContourCandidate = applyContourMicroInterpolation(selected, alphaMap, postInternalContourOptions(options));
+  const postInternalContour = postContourCandidate.contourMicroInterpolation || null;
+  const postInternalContourAccepted = Boolean(postInternalContour?.accepted);
+  if (postInternalContourAccepted) {
+    selected = {
+      width: postContourCandidate.width,
+      height: postContourCandidate.height,
+      data: new Uint8ClampedArray(postContourCandidate.data)
+    };
+  }
+
+  const accepted = structuredAccepted
+    || finalAccepted
+    || outlineEscalationAccepted
+    || contourMicroInterpolationAccepted
+    || internalResidualAccepted
+    || postInternalContourAccepted;
   let acceptedMode = 'none';
   if (outlineEscalationAccepted) {
     if (structuredAccepted && finalAccepted) acceptedMode = 'structured-smooth+final-visual+outline-escalation';
@@ -312,6 +362,11 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       ? 'internal-residual-rescue'
       : `${acceptedMode}+internal-residual`;
   }
+  if (postInternalContourAccepted) {
+    acceptedMode = acceptedMode === 'none'
+      ? 'post-internal-contour-dissolve'
+      : `${acceptedMode}+post-internal-contour`;
+  }
 
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
@@ -328,7 +383,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
         || Boolean(finalVisualResidual?.attempted)
         || Boolean(outlineResidualEscalation?.attempted)
         || Boolean(contourMicroInterpolation?.attempted)
-        || Boolean(internalResidualRescue?.attempted),
+        || Boolean(internalResidualRescue?.attempted)
+        || Boolean(postInternalContour?.attempted),
       accepted,
       acceptedMode,
       structuredAttempted,
@@ -338,6 +394,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       outlineEscalationAccepted,
       contourMicroInterpolationAccepted,
       internalResidualAccepted,
+      postInternalContourAccepted,
       ...gate,
       beforeGlobal,
       afterGlobal: finalGlobal,
@@ -356,6 +413,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       outlineResidualEscalation,
       contourMicroInterpolation,
       internalResidualRescue,
+      postInternalContour,
       postChainOutlineResidual,
       postChainOutlineSceneSafe
     }
