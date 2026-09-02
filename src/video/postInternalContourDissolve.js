@@ -35,6 +35,11 @@ function optionalDeltaSafe(after, before, tolerance) {
   if (!Number.isFinite(after) || !Number.isFinite(before)) return true;
   return after <= before + tolerance;
 }
+function distanceToRange(value, min, max) {
+  if (value < min) return min - value;
+  if (value > max) return value - max;
+  return 0;
+}
 
 function alphaGradient(alphaMap, width, height, x, y) {
   if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1) return { gx: 0, gy: 0, magnitude: 0 };
@@ -374,6 +379,233 @@ function assessCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, optio
   };
 }
 
+function buildResidualSweepCandidate(image, alphaMap, options = {}) {
+  const data = new Uint8ClampedArray(image.data);
+  const sweepMaxAlpha = Number.isFinite(options.sweepMaxAlpha) ? options.sweepMaxAlpha : 0.30;
+  const safety = buildContourSafetyBand(alphaMap, image.width, image.height, {
+    ...options,
+    maxAlpha: sweepMaxAlpha,
+    safetyRadius: Number.isFinite(options.sweepSafetyRadius) ? options.sweepSafetyRadius : 4,
+    safetyTipExtraRadius: Number.isFinite(options.sweepSafetyTipExtraRadius) ? options.sweepSafetyTipExtraRadius : 2
+  });
+  const minAlpha = Number.isFinite(options.sweepMinAlpha) ? options.sweepMinAlpha : 0.006;
+  const maxAlpha = sweepMaxAlpha;
+  const minGradient = Number.isFinite(options.sweepMinAlphaGradient) ? options.sweepMinAlphaGradient : 0.0018;
+  const fullGradient = Number.isFinite(options.sweepFullAlphaGradient) ? options.sweepFullAlphaGradient : 0.030;
+  const hardSceneGuard = Number.isFinite(options.sweepHardSceneGuard) ? options.sweepHardSceneGuard : 0.58;
+  const lineProtectThreshold = Number.isFinite(options.sweepLineProtectThreshold) ? options.sweepLineProtectThreshold : 0.72;
+  const minConfidence = Number.isFinite(options.sweepMinConfidence) ? options.sweepMinConfidence : 0.12;
+  const outlineOnlyGain = clamp(Number(options.outlineOnlyGain ?? 1.20), 0.80, 1.35);
+  const outlineOnlyMaxBlend = clamp(Number(options.outlineOnlyMaxBlend ?? 0.22), 0.08, 0.28);
+  const outlineOnlyMaxLumaDelta = clamp(Number(options.outlineOnlyMaxLumaDelta ?? 7), 3, 9);
+  const residualSoft = Number.isFinite(options.sweepResidualSoft) ? options.sweepResidualSoft : 0.28;
+  const residualHard = Number.isFinite(options.sweepResidualHard) ? options.sweepResidualHard : 2.6;
+  let contourCandidates = 0;
+  let highConfidencePixels = 0;
+  let correctedPixels = 0;
+  let sceneGuardedPixels = 0;
+  let lineProtectedPixels = 0;
+  let missingOuterPrediction = 0;
+  let artifactVetoPixels = 0;
+  let blendSum = 0;
+  let confidenceSum = 0;
+  let textureSum = 0;
+  let localBeforeResidualSum = 0;
+  let localAfterResidualSum = 0;
+  let maxAppliedLumaDelta = 0;
+
+  const predictionOptions = {
+    ...options,
+    cleanAlpha: Number.isFinite(options.sweepCleanAlpha) ? options.sweepCleanAlpha : (Number.isFinite(options.cleanAlpha) ? options.cleanAlpha : 0.010),
+    maxAnchorSafetyWeight: Number.isFinite(options.sweepMaxAnchorSafetyWeight)
+      ? options.sweepMaxAnchorSafetyWeight
+      : (Number.isFinite(options.maxAnchorSafetyWeight) ? options.maxAnchorSafetyWeight : 0.04),
+    maxRadius: Number.isFinite(options.sweepMaxRadius) ? options.sweepMaxRadius : 20
+  };
+
+  for (let y = 2; y < image.height - 2; y++) {
+    for (let x = 2; x < image.width - 2; x++) {
+      const p = y * image.width + x;
+      const alpha = alphaMap[p] || 0;
+      const gradient = alphaGradient(alphaMap, image.width, image.height, x, y);
+      const safetyWeight = safety.weight[p] || 0;
+      const edgeBand = smoothstep(minGradient, fullGradient, gradient.magnitude);
+      const faintOuter = alpha < minAlpha && safety.distance[p] <= 1 && safetyWeight >= 0.10;
+      if (!faintOuter && (alpha < minAlpha || alpha > maxAlpha)) continue;
+      const alphaEnvelope = alpha <= maxAlpha
+        ? 1 - 0.75 * smoothstep(maxAlpha * 0.65, maxAlpha, alpha)
+        : 0;
+      const geometry = Math.max(edgeBand, Math.min(0.85, safetyWeight * 0.80)) * alphaEnvelope;
+      if (geometry < 0.08) continue;
+      contourCandidates++;
+
+      const scene = sceneEdgeProtectionAt(image, safety.guardAlpha, x, y, options.sceneEdgeOptions || {});
+      if (scene.weight >= hardSceneGuard) {
+        sceneGuardedPixels++;
+        if (scene.weight >= lineProtectThreshold) lineProtectedPixels++;
+        continue;
+      }
+
+      const prediction = outerPrediction(image, alphaMap, safety, x, y, predictionOptions);
+      if (!prediction) {
+        missingOuterPrediction++;
+        continue;
+      }
+
+      const currentRgb = rgbAt(image, x, y);
+      const current = rgbToYcbcr(currentRgb);
+      const target = rgbToYcbcr(prediction.target);
+      const residual = target[0] - current[0];
+      const residualGate = smoothstep(residualSoft, residualHard, Math.abs(residual));
+      if (residualGate <= 0) continue;
+
+      const texture = prediction.textureComplexity;
+      const textureSignal = prediction.lumaRange + prediction.regressionMae * 1.8;
+      const outerAgreement = 1 - smoothstep(options.sweepTextureSoft ?? 5.0, options.sweepTextureHard ?? 18.0, textureSignal);
+      const sceneWeight = clamp(1 - scene.weight * 1.65, 0, 1);
+      const textureAttenuation = 1 - texture * 0.45;
+      const confidence = geometry
+        * residualGate
+        * (0.55 + outerAgreement * 0.45)
+        * sceneWeight
+        * textureAttenuation;
+      if (confidence < minConfidence) continue;
+      highConfidencePixels++;
+
+      const blend = Math.min(outlineOnlyMaxBlend, outlineOnlyGain * confidence);
+      if (blend < 0.025) continue;
+      const requestedDelta = clamp(residual, -outlineOnlyMaxLumaDelta, outlineOnlyMaxLumaDelta) * blend;
+      const candidateY = current[0] + requestedDelta;
+
+      const artifactMargin = Number(options.sweepArtifactMargin ?? 5) + texture * 2;
+      const currentRangeDistance = distanceToRange(current[0], prediction.minY, prediction.maxY);
+      const candidateRangeDistance = distanceToRange(candidateY, prediction.minY, prediction.maxY);
+      const rangeSafe = currentRangeDistance > artifactMargin
+        ? candidateRangeDistance + 0.02 < currentRangeDistance
+        : candidateRangeDistance <= artifactMargin;
+      const medianLimit = Math.max(Number(options.sweepMedianMargin ?? 9), prediction.lumaRange * 0.75 + 6);
+      const currentMedianDistance = Math.abs(current[0] - prediction.medianY);
+      const candidateMedianDistance = Math.abs(candidateY - prediction.medianY);
+      const medianSafe = currentMedianDistance > medianLimit
+        ? candidateMedianDistance + 0.02 < currentMedianDistance
+        : candidateMedianDistance <= medianLimit;
+      const improvesResidual = Math.abs(target[0] - candidateY) + 0.02 < Math.abs(residual);
+      if (!improvesResidual || !rangeSafe || !medianSafe) {
+        artifactVetoPixels++;
+        continue;
+      }
+
+      const chromaBlend = Math.min(0.04, Math.max(0.008, blend * 0.10));
+      const cb = current[1] + clamp(target[1] - current[1], -5, 5) * chromaBlend;
+      const cr = current[2] + clamp(target[2] - current[2], -5, 5) * chromaBlend;
+      const nextRgb = ycbcrToRgb(candidateY, cb, cr);
+      const nextY = luma(nextRgb);
+      if (Math.abs(target[0] - nextY) + 0.01 >= Math.abs(residual)) {
+        artifactVetoPixels++;
+        continue;
+      }
+      const idx = p * 4;
+      if (nextRgb[0] === image.data[idx] && nextRgb[1] === image.data[idx + 1] && nextRgb[2] === image.data[idx + 2]) continue;
+      data[idx] = nextRgb[0];
+      data[idx + 1] = nextRgb[1];
+      data[idx + 2] = nextRgb[2];
+      correctedPixels++;
+      blendSum += blend;
+      confidenceSum += confidence;
+      textureSum += texture;
+      localBeforeResidualSum += Math.abs(residual);
+      localAfterResidualSum += Math.abs(target[0] - nextY);
+      maxAppliedLumaDelta = Math.max(maxAppliedLumaDelta, Math.abs(nextY - current[0]));
+    }
+  }
+
+  const localBeforeResidual = correctedPixels ? localBeforeResidualSum / correctedPixels : 0;
+  const localAfterResidual = correctedPixels ? localAfterResidualSum / correctedPixels : 0;
+  const localImprovement = localBeforeResidual > 1e-9
+    ? (localBeforeResidual - localAfterResidual) / localBeforeResidual
+    : 0;
+  const attemptedPixels = correctedPixels + artifactVetoPixels;
+  const meanTextureComplexity = correctedPixels ? textureSum / correctedPixels : 0;
+  const profile = lineProtectedPixels > 0
+    ? 'line-crossing-protected'
+    : meanTextureComplexity >= 0.52
+      ? 'structured-texture'
+      : 'contour-only';
+
+  return {
+    width: image.width,
+    height: image.height,
+    data,
+    contourCandidates,
+    highConfidencePixels,
+    correctedPixels,
+    sceneGuardedPixels,
+    lineProtectedPixels,
+    missingOuterPrediction,
+    artifactVetoPixels,
+    artifactVetoFraction: attemptedPixels ? artifactVetoPixels / attemptedPixels : 0,
+    meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
+    meanConfidence: correctedPixels ? confidenceSum / correctedPixels : 0,
+    meanTextureComplexity,
+    localBeforeResidual,
+    localAfterResidual,
+    localImprovement,
+    maxAppliedLumaDelta,
+    profile,
+    outlineOnlyGain,
+    outlineOnlyMaxBlend,
+    outlineOnlyMaxLumaDelta,
+    minConfidence
+  };
+}
+
+function assessResidualSweepCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, options = {}) {
+  const afterOutline = measureGeometricOutlineResidual(candidate, alphaMap, {
+    ...outlineMeasureOptions(options),
+    outlineMinAlpha: Number.isFinite(options.sweepMinAlpha) ? options.sweepMinAlpha : 0.006,
+    outlineMaxAlpha: Number.isFinite(options.sweepMaxAlpha) ? options.sweepMaxAlpha : 0.30,
+    outlineResidualSoft: Number.isFinite(options.sweepMeasureResidualSoft) ? options.sweepMeasureResidualSoft : 0.28,
+    outlineResidualHard: Number.isFinite(options.sweepMeasureResidualHard) ? options.sweepMeasureResidualHard : 3.2
+  });
+  const afterGlobal = measurePostCleanupResidual(candidate, alphaMap);
+  const improvement = beforeOutline.score > 1e-9
+    ? (beforeOutline.score - afterOutline.score) / beforeOutline.score
+    : 0;
+  const minCorrectedPixels = Math.max(3, Math.round(Number(options.sweepMinCorrectedPixels ?? 4)));
+  const minLocalImprovement = Number.isFinite(options.sweepMinLocalImprovement) ? options.sweepMinLocalImprovement : 0.045;
+  const maxMeanBlend = Number.isFinite(options.sweepMaxMeanBlend) ? options.sweepMaxMeanBlend : 0.22;
+  const maxArtifactVetoFraction = Number.isFinite(options.sweepMaxArtifactVetoFraction) ? options.sweepMaxArtifactVetoFraction : 0.78;
+  const enoughPixels = candidate.correctedPixels >= minCorrectedPixels;
+  const localGood = candidate.localImprovement >= minLocalImprovement;
+  const outlineSafe = beforeOutline.score < 0.20
+    ? afterOutline.score <= 0.38
+    : afterOutline.score <= beforeOutline.score * (options.sweepMaxOutlineRatio ?? 1.004) + 0.02;
+  const globalSafe = afterGlobal.total <= beforeGlobal.total * 1.004 + 0.030
+    && afterGlobal.luma <= beforeGlobal.luma * 1.006 + 0.040
+    && afterGlobal.chroma <= beforeGlobal.chroma * 1.005 + 0.25
+    && optionalDeltaSafe(afterGlobal.darkCandidateMean, beforeGlobal.darkCandidateMean, 0.25)
+    && optionalDeltaSafe(afterGlobal.darkCandidatePeak, beforeGlobal.darkCandidatePeak, 0.90)
+    && optionalDeltaSafe(afterGlobal.clipFraction, beforeGlobal.clipFraction, 0.001);
+  const artifactSafe = candidate.artifactVetoFraction <= maxArtifactVetoFraction
+    && candidate.meanBlend <= maxMeanBlend + 1e-6;
+  const accepted = enoughPixels && localGood && outlineSafe && globalSafe && artifactSafe;
+  return {
+    accepted,
+    afterOutline,
+    afterGlobal,
+    improvement,
+    enoughPixels,
+    localGood,
+    outlineSafe,
+    globalSafe,
+    artifactSafe,
+    minCorrectedPixels,
+    minLocalImprovement,
+    maxMeanBlend,
+    maxArtifactVetoFraction
+  };
+}
+
 export function applyPostInternalContourDissolve(image, alphaMap, options = {}) {
   const beforeOutline = measureGeometricOutlineResidual(image, alphaMap, outlineMeasureOptions(options));
   const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
@@ -399,7 +631,14 @@ export function applyPostInternalContourDissolve(image, alphaMap, options = {}) 
         correctedPixels: 0,
         artifactVetoPixels: 0,
         passesAttempted: 0,
-        passesAccepted: 0
+        passesAccepted: 0,
+        residualContourSweep: {
+          eligible: false,
+          attempted: false,
+          accepted: false,
+          profile: 'none',
+          correctedPixels: 0
+        }
       }
     };
   }
@@ -435,7 +674,82 @@ export function applyPostInternalContourDissolve(image, alphaMap, options = {}) 
     }
   }
 
-  const accepted = passesAccepted > 0;
+  const baseAccepted = passesAccepted > 0;
+  const baseAfterOutline = baseAccepted ? finalAssessment.afterOutline : beforeOutline;
+  const baseAfterGlobal = baseAccepted ? finalAssessment.afterGlobal : beforeGlobal;
+
+  const sweepCandidate = buildResidualSweepCandidate(selected, alphaMap, options);
+  const sweepMinOutlineScore = Number.isFinite(options.sweepMinOutlineScore) ? options.sweepMinOutlineScore : 0.55;
+  const sweepMinOutlineDensity = Number.isFinite(options.sweepMinOutlineDensity) ? options.sweepMinOutlineDensity : 0.030;
+  const sweepMinOutlineSamples = Math.max(4, Math.round(Number(options.sweepMinOutlineSamples ?? 6)));
+  const sweepMinConfidencePixels = Math.max(3, Math.round(Number(options.sweepMinConfidencePixels ?? 4)));
+  const outlineSignal = baseAfterOutline.score >= sweepMinOutlineScore
+    && baseAfterOutline.candidateDensity >= sweepMinOutlineDensity
+    && baseAfterOutline.samples >= sweepMinOutlineSamples;
+  const confidenceSignal = sweepCandidate.highConfidencePixels >= sweepMinConfidencePixels;
+  const sweepEligible = options.residualContourSweepEnabled !== false && (outlineSignal || confidenceSignal);
+  let sweepAssessment = null;
+  let sweepAccepted = false;
+  if (sweepEligible && sweepCandidate.correctedPixels > 0) {
+    sweepAssessment = assessResidualSweepCandidate(sweepCandidate, alphaMap, baseAfterOutline, baseAfterGlobal, options);
+    sweepAccepted = Boolean(sweepAssessment.accepted);
+    if (sweepAccepted) {
+      selected = { width: image.width, height: image.height, data: new Uint8ClampedArray(sweepCandidate.data) };
+    }
+  }
+
+  const accepted = baseAccepted || sweepAccepted;
+  const finalAfterOutline = sweepAccepted ? sweepAssessment.afterOutline : baseAfterOutline;
+  const finalAfterGlobal = sweepAccepted ? sweepAssessment.afterGlobal : baseAfterGlobal;
+  const residualOutlineHigh = finalAfterOutline.score >= (options.sweepResidualHighScore ?? 0.95)
+    && finalAfterOutline.candidateDensity >= (options.sweepResidualHighDensity ?? 0.050)
+    && finalAfterOutline.samples >= Math.max(4, Math.round(Number(options.sweepResidualHighSamples ?? 8)));
+
+  const residualContourSweep = {
+    eligible: sweepEligible,
+    attempted: sweepEligible && sweepCandidate.correctedPixels > 0,
+    accepted: sweepAccepted,
+    profile: sweepCandidate.profile,
+    outlineSignal,
+    confidenceSignal,
+    beforeOutline: baseAfterOutline,
+    afterOutline: sweepAccepted ? sweepAssessment.afterOutline : baseAfterOutline,
+    candidateAfterOutline: sweepAssessment?.afterOutline || baseAfterOutline,
+    beforeGlobal: baseAfterGlobal,
+    afterGlobal: sweepAccepted ? sweepAssessment.afterGlobal : baseAfterGlobal,
+    candidateAfterGlobal: sweepAssessment?.afterGlobal || baseAfterGlobal,
+    candidateImprovement: sweepAssessment?.improvement || 0,
+    contourCandidates: sweepCandidate.contourCandidates,
+    highConfidencePixels: sweepCandidate.highConfidencePixels,
+    correctedPixels: sweepAccepted ? sweepCandidate.correctedPixels : 0,
+    candidateCorrectedPixels: sweepCandidate.correctedPixels,
+    sceneGuardedPixels: sweepCandidate.sceneGuardedPixels,
+    lineProtectedPixels: sweepCandidate.lineProtectedPixels,
+    missingOuterPrediction: sweepCandidate.missingOuterPrediction,
+    artifactVetoPixels: sweepCandidate.artifactVetoPixels,
+    artifactVetoFraction: sweepCandidate.artifactVetoFraction,
+    meanBlend: sweepAccepted ? sweepCandidate.meanBlend : 0,
+    candidateMeanBlend: sweepCandidate.meanBlend,
+    meanConfidence: sweepCandidate.meanConfidence,
+    meanTextureComplexity: sweepCandidate.meanTextureComplexity,
+    localBeforeResidual: sweepCandidate.localBeforeResidual,
+    localAfterResidual: sweepCandidate.localAfterResidual,
+    localImprovement: sweepCandidate.localImprovement,
+    maxAppliedLumaDelta: sweepCandidate.maxAppliedLumaDelta,
+    outlineOnlyGain: sweepCandidate.outlineOnlyGain,
+    outlineOnlyMaxBlend: sweepCandidate.outlineOnlyMaxBlend,
+    outlineOnlyMaxLumaDelta: sweepCandidate.outlineOnlyMaxLumaDelta,
+    minConfidence: sweepCandidate.minConfidence,
+    globalSafe: sweepAssessment?.globalSafe ?? true,
+    outlineSafe: sweepAssessment?.outlineSafe ?? true,
+    artifactSafe: sweepAssessment?.artifactSafe ?? true,
+    minCorrectedPixels: sweepAssessment?.minCorrectedPixels ?? Math.max(3, Math.round(Number(options.sweepMinCorrectedPixels ?? 4))),
+    minLocalImprovement: sweepAssessment?.minLocalImprovement ?? (Number.isFinite(options.sweepMinLocalImprovement) ? options.sweepMinLocalImprovement : 0.045),
+    maxMeanBlend: sweepAssessment?.maxMeanBlend ?? (Number.isFinite(options.sweepMaxMeanBlend) ? options.sweepMaxMeanBlend : 0.22),
+    maxArtifactVetoFraction: sweepAssessment?.maxArtifactVetoFraction ?? (Number.isFinite(options.sweepMaxArtifactVetoFraction) ? options.sweepMaxArtifactVetoFraction : 0.78),
+    residualOutlineHigh
+  };
+
   return {
     width: image.width,
     height: image.height,
@@ -445,33 +759,33 @@ export function applyPostInternalContourDissolve(image, alphaMap, options = {}) 
       attempted: true,
       accepted,
       beforeOutline,
-      afterOutline: accepted ? finalAssessment.afterOutline : beforeOutline,
-      candidateAfterOutline: finalAssessment.afterOutline,
+      afterOutline: accepted ? finalAfterOutline : beforeOutline,
+      candidateAfterOutline: sweepAssessment?.afterOutline || finalAssessment.afterOutline,
       beforeGlobal,
-      afterGlobal: accepted ? finalAssessment.afterGlobal : beforeGlobal,
-      candidateAfterGlobal: finalAssessment.afterGlobal,
+      afterGlobal: accepted ? finalAfterGlobal : beforeGlobal,
+      candidateAfterGlobal: sweepAssessment?.afterGlobal || finalAssessment.afterGlobal,
       improvement: accepted && beforeOutline.score > 1e-9
-        ? (beforeOutline.score - finalAssessment.afterOutline.score) / beforeOutline.score
+        ? (beforeOutline.score - finalAfterOutline.score) / beforeOutline.score
         : 0,
-      candidateImprovement: finalAssessment.improvement,
-      correctedPixels: accepted ? finalCandidate.correctedPixels : 0,
-      candidateCorrectedPixels: finalCandidate.correctedPixels,
-      structuredCorrectedPixels: accepted ? finalCandidate.structuredCorrectedPixels : 0,
-      sceneGuardedPixels: finalCandidate.sceneGuardedPixels,
-      missingOuterPrediction: finalCandidate.missingOuterPrediction,
-      artifactVetoPixels: finalCandidate.artifactVetoPixels,
-      artifactVetoFraction: finalCandidate.artifactVetoFraction,
+      candidateImprovement: sweepAssessment?.improvement ?? finalAssessment.improvement,
+      correctedPixels: (baseAccepted ? finalCandidate.correctedPixels : 0) + (sweepAccepted ? sweepCandidate.correctedPixels : 0),
+      candidateCorrectedPixels: finalCandidate.correctedPixels + sweepCandidate.correctedPixels,
+      structuredCorrectedPixels: baseAccepted ? finalCandidate.structuredCorrectedPixels : 0,
+      sceneGuardedPixels: finalCandidate.sceneGuardedPixels + sweepCandidate.sceneGuardedPixels,
+      missingOuterPrediction: finalCandidate.missingOuterPrediction + sweepCandidate.missingOuterPrediction,
+      artifactVetoPixels: finalCandidate.artifactVetoPixels + sweepCandidate.artifactVetoPixels,
+      artifactVetoFraction: Math.max(finalCandidate.artifactVetoFraction, sweepCandidate.artifactVetoFraction),
       fallbackDirectionPixels: finalCandidate.fallbackDirectionPixels,
-      meanBlend: accepted ? finalCandidate.meanBlend : 0,
-      candidateMeanBlend: finalCandidate.meanBlend,
-      meanTextureComplexity: finalCandidate.meanTextureComplexity,
-      localBeforeResidual: finalCandidate.localBeforeResidual,
-      localAfterResidual: finalCandidate.localAfterResidual,
-      localImprovement: finalCandidate.localImprovement,
-      maxAppliedLumaDelta: finalCandidate.maxAppliedLumaDelta,
-      globalSafe: finalAssessment.globalSafe,
-      outlineSafe: finalAssessment.outlineSafe,
-      artifactSafe: finalAssessment.artifactSafe,
+      meanBlend: sweepAccepted ? sweepCandidate.meanBlend : (baseAccepted ? finalCandidate.meanBlend : 0),
+      candidateMeanBlend: Math.max(finalCandidate.meanBlend, sweepCandidate.meanBlend),
+      meanTextureComplexity: sweepAccepted ? sweepCandidate.meanTextureComplexity : finalCandidate.meanTextureComplexity,
+      localBeforeResidual: sweepAccepted ? sweepCandidate.localBeforeResidual : finalCandidate.localBeforeResidual,
+      localAfterResidual: sweepAccepted ? sweepCandidate.localAfterResidual : finalCandidate.localAfterResidual,
+      localImprovement: sweepAccepted ? sweepCandidate.localImprovement : finalCandidate.localImprovement,
+      maxAppliedLumaDelta: Math.max(finalCandidate.maxAppliedLumaDelta, sweepCandidate.maxAppliedLumaDelta),
+      globalSafe: sweepAssessment?.globalSafe ?? finalAssessment.globalSafe,
+      outlineSafe: sweepAssessment?.outlineSafe ?? finalAssessment.outlineSafe,
+      artifactSafe: sweepAssessment?.artifactSafe ?? finalAssessment.artifactSafe,
       minCorrectedPixels: finalAssessment.minCorrectedPixels,
       minLocalImprovement: finalAssessment.minLocalImprovement,
       maxMeanBlend: finalAssessment.maxMeanBlend,
@@ -479,7 +793,9 @@ export function applyPostInternalContourDissolve(image, alphaMap, options = {}) 
       safetyBand: finalCandidate.safetyBand,
       passesAttempted,
       passesAccepted,
-      maxPasses
+      maxPasses,
+      residualContourSweep,
+      residualOutlineHigh
     }
   };
 }
