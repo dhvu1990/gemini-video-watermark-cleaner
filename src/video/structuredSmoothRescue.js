@@ -9,6 +9,7 @@ import {
 import { applyOutlineResidualEscalation } from './outlineResidualEscalation.js';
 import { applyContourMicroInterpolation } from './contourMicroInterpolation.js';
 import { applyInternalResidualRescue } from './internalResidualRescue.js';
+import { applyPostInternalContourDissolve } from './postInternalContourDissolve.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
@@ -169,32 +170,28 @@ function internalResidualOptions(options = {}) {
 function postInternalContourOptions(options = {}) {
   return {
     enabled: options.postInternalContourEnabled !== false,
-    minScore: finite(options.postInternalContourMinScore, 0.72),
-    minDensity: finite(options.postInternalContourMinDensity, 0.025),
-    minSamples: Math.max(8, Math.round(finite(options.postInternalContourMinSamples, 8))),
-    minSectors: Math.max(2, Math.round(finite(options.postInternalContourMinSectors, 2))),
     minAlpha: finite(options.postInternalContourMinAlpha, 0.010),
     maxAlpha: finite(options.postInternalContourMaxAlpha, 0.42),
     cleanAlpha: finite(options.postInternalContourCleanAlpha, 0.010),
-    maxRadius: Math.max(6, Math.round(finite(options.postInternalContourMaxRadius, 16))),
-    hardSceneGuard: finite(options.postInternalContourHardSceneGuard, 0.44),
-    strength: finite(options.postInternalContourStrength, 0.50),
-    maxBlend: finite(options.postInternalContourMaxBlend, 0.36),
-    maxLumaDelta: finite(options.postInternalContourMaxLumaDelta, 9),
-    safetyStrength: finite(options.postInternalContourSafetyStrength, 0.46),
-    safetyMaxBlend: finite(options.postInternalContourSafetyMaxBlend, 0.36),
+    maxRadius: Math.max(7, Math.round(finite(options.postInternalContourMaxRadius, 18))),
+    hardSceneGuard: finite(options.postInternalContourHardSceneGuard, 0.40),
+    smoothStrength: finite(options.postInternalContourSmoothStrength, 0.58),
+    structuredStrength: finite(options.postInternalContourStructuredStrength, 0.34),
+    smoothMaxBlend: finite(options.postInternalContourSmoothMaxBlend, 0.42),
+    structuredMaxBlend: finite(options.postInternalContourStructuredMaxBlend, 0.27),
+    smoothMaxLumaDelta: finite(options.postInternalContourSmoothMaxLumaDelta, 11),
+    structuredMaxLumaDelta: finite(options.postInternalContourStructuredMaxLumaDelta, 8),
     residualSoft: finite(options.postInternalContourResidualSoft, 0.38),
     residualHard: finite(options.postInternalContourResidualHard, 3.0),
-    safetyResidualSoft: finite(options.postInternalContourSafetyResidualSoft, 0.32),
-    safetyResidualHard: finite(options.postInternalContourSafetyResidualHard, 2.6),
-    minCorrectedPixels: Math.max(4, Math.round(finite(options.postInternalContourMinCorrectedPixels, 4))),
-    minImprovement: finite(options.postInternalContourMinImprovement, 0.002),
-    maxOutlineRatio: finite(options.postInternalContourMaxOutlineRatio, 0.998),
-    maxMeanBlend: finite(options.postInternalContourMaxMeanBlend, 0.32),
-    localMinImprovement: finite(options.postInternalContourLocalMinImprovement, 0.07),
-    localMaxGuardedFraction: finite(options.postInternalContourLocalMaxGuardedFraction, 0.80),
-    localMaxMeanBlend: finite(options.postInternalContourLocalMaxMeanBlend, 0.30),
-    maxRescuePasses: Math.max(1, Math.min(2, Math.round(finite(options.postInternalContourMaxRescuePasses, 2)))),
+    minCorrectedPixels: Math.max(3, Math.round(finite(options.postInternalContourMinCorrectedPixels, 4))),
+    minLocalImprovement: finite(options.postInternalContourMinLocalImprovement, 0.055),
+    maxMeanBlend: finite(options.postInternalContourMaxMeanBlend, 0.34),
+    maxArtifactVetoFraction: finite(options.postInternalContourMaxArtifactVetoFraction, 0.72),
+    maxOutlineRatio: finite(options.postInternalContourMaxOutlineRatio, 1.002),
+    maxPasses: Math.max(1, Math.min(2, Math.round(finite(options.postInternalContourMaxPasses, 2)))),
+    minContourPixels: Math.max(8, Math.round(finite(options.postInternalContourMinContourPixels, 12))),
+    maxAnchorSafetyWeight: finite(options.postInternalContourMaxAnchorSafetyWeight, 0.04),
+    localArtifactMargin: finite(options.postInternalContourLocalArtifactMargin, 6),
     sceneEdgeOptions: options.sceneEdgeOptions || {},
     ...(options.postInternalContourOptions || {})
   };
@@ -324,8 +321,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
-  const postContourCandidate = applyContourMicroInterpolation(selected, alphaMap, postInternalContourOptions(options));
-  const postInternalContour = postContourCandidate.contourMicroInterpolation || null;
+  const postContourCandidate = applyPostInternalContourDissolve(selected, alphaMap, postInternalContourOptions(options));
+  const postInternalContour = postContourCandidate.postInternalContourDissolve || null;
   const postInternalContourAccepted = Boolean(postInternalContour?.accepted);
   if (postInternalContourAccepted) {
     selected = {
@@ -414,6 +411,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       contourMicroInterpolation,
       internalResidualRescue,
       postInternalContour,
+      postInternalContourDissolve: postInternalContour,
       postChainOutlineResidual,
       postChainOutlineSceneSafe
     }
