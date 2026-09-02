@@ -31,6 +31,10 @@ function median(values) {
   const mid = Math.floor(sorted.length / 2);
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5;
 }
+function optionalDeltaSafe(after, before, tolerance) {
+  if (!Number.isFinite(after) || !Number.isFinite(before)) return true;
+  return after <= before + tolerance;
+}
 
 function alphaGradient(alphaMap, width, height, x, y) {
   if (x < 1 || y < 1 || x >= width - 1 || y >= height - 1) return { gx: 0, gy: 0, magnitude: 0 };
@@ -347,11 +351,11 @@ function assessCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, optio
   const globalSafe = afterGlobal.total <= beforeGlobal.total * 1.003 + 0.025
     && afterGlobal.luma <= beforeGlobal.luma * 1.004 + 0.035
     && afterGlobal.chroma <= beforeGlobal.chroma * 1.003 + 0.22
-    && afterGlobal.darkCandidateMean <= beforeGlobal.darkCandidateMean + 0.30
-    && afterGlobal.darkCandidatePeak <= beforeGlobal.darkCandidatePeak + 1.05
-    && afterGlobal.clipFraction <= beforeGlobal.clipFraction + 0.001;
+    && optionalDeltaSafe(afterGlobal.darkCandidateMean, beforeGlobal.darkCandidateMean, 0.30)
+    && optionalDeltaSafe(afterGlobal.darkCandidatePeak, beforeGlobal.darkCandidatePeak, 1.05)
+    && optionalDeltaSafe(afterGlobal.clipFraction, beforeGlobal.clipFraction, 0.001);
   const artifactSafe = candidate.artifactVetoFraction <= maxArtifactVetoFraction
-    && candidate.meanBlend <= maxMeanBlend;
+    && candidate.meanBlend <= maxMeanBlend + 1e-6;
   const accepted = enoughPixels && localGood && outlineSafe && globalSafe && artifactSafe;
   return {
     accepted,
