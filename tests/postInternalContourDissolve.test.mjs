@@ -132,7 +132,8 @@ test('local artifact veto blocks a destructive dark or bright hole proposal', ()
   });
   const result = applyPostInternalContourDissolve(image, alpha, permissiveOptions({
     localArtifactMargin: 2,
-    maxArtifactVetoFraction: 1
+    maxArtifactVetoFraction: 1,
+    residualContourSweepEnabled: false
   }));
   const diagnostics = result.postInternalContourDissolve;
   assert.equal(diagnostics.attempted, true, JSON.stringify(diagnostics));
@@ -154,4 +155,59 @@ test('production caps keep structured texture corrections below smooth-field str
   assert.match(source, /optionalDeltaSafe\(afterGlobal\.darkCandidateMean, beforeGlobal\.darkCandidateMean, 0\.30\)/);
   assert.match(source, /optionalDeltaSafe\(afterGlobal\.darkCandidatePeak, beforeGlobal\.darkCandidatePeak, 1\.05\)/);
   assert.match(source, /artifactVetoFraction <= maxArtifactVetoFraction/);
+});
+
+test('residual contour sweep can act after the broad contour pass is scene-locked', () => {
+  const width = 72;
+  const height = 72;
+  const alpha = diamondAlpha(width, height);
+  const cx = (width - 1) * 0.5;
+  const cy = (height - 1) * 0.5;
+  const image = makeImage(width, height, (x, y) => {
+    const d = Math.abs(x - cx) + Math.abs(y - cy);
+    const contour = d >= 11 && d <= 15;
+    const value = contour ? 112 : 100;
+    return [value, value, value];
+  });
+  const x = Math.round(cx);
+  const y = Math.round(cy - 13);
+  const before = lumaAt(image, x, y);
+  const result = applyPostInternalContourDissolve(image, alpha, permissiveOptions({
+    hardSceneGuard: 0,
+    sweepHardSceneGuard: 0.98,
+    sweepLineProtectThreshold: 0.98,
+    sweepMinConfidence: 0.01,
+    sweepMinOutlineScore: 0,
+    sweepMinOutlineDensity: 0,
+    sweepMinOutlineSamples: 1,
+    sweepMinConfidencePixels: 1,
+    sweepMinCorrectedPixels: 1,
+    sweepMinLocalImprovement: 0,
+    sweepMaxMeanBlend: 0.22,
+    sweepMaxArtifactVetoFraction: 1,
+    sweepMaxOutlineRatio: 2,
+    sweepArtifactMargin: 20
+  }));
+  const sweep = result.postInternalContourDissolve.residualContourSweep;
+  assert.equal(sweep.eligible, true, JSON.stringify(sweep));
+  assert.equal(sweep.attempted, true, JSON.stringify(sweep));
+  assert.equal(sweep.accepted, true, JSON.stringify(sweep));
+  assert.ok(sweep.candidateCorrectedPixels >= 1, JSON.stringify(sweep));
+  assert.ok(sweep.candidateMeanBlend <= 0.22 + 1e-6, JSON.stringify(sweep));
+  assert.ok(lumaAt(result, x, y) < before, `before=${before}, after=${lumaAt(result, x, y)}`);
+});
+
+test('residual contour sweep stays narrow, bounded and line-aware', () => {
+  const source = fs.readFileSync(
+    new URL('../src/video/postInternalContourDissolve.js', import.meta.url),
+    'utf8'
+  );
+  assert.match(source, /sweepMaxAlpha\) \? options\.sweepMaxAlpha : 0\.30/);
+  assert.match(source, /outlineOnlyGain \?\? 1\.20/);
+  assert.match(source, /outlineOnlyMaxBlend \?\? 0\.22/);
+  assert.match(source, /outlineOnlyMaxLumaDelta \?\? 7/);
+  assert.match(source, /sweepHardSceneGuard\) \? options\.sweepHardSceneGuard : 0\.58/);
+  assert.match(source, /sweepLineProtectThreshold\) \? options\.sweepLineProtectThreshold : 0\.72/);
+  assert.match(source, /candidateRangeDistance \+ 0\.02 < currentRangeDistance/);
+  assert.match(source, /residualContourSweep/);
 });
