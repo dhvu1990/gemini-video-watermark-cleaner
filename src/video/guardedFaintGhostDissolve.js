@@ -282,7 +282,12 @@ function buildCandidate(image, alphaMap, options = {}) {
       const blend = Math.min(localMaxBlend, localStrength * confidence);
       if (blend < 0.012) continue;
 
-      const requestedDelta = clamp(residual, -localMaxLumaDelta, localMaxLumaDelta) * blend;
+      // Near protected scene structure, cap the actual blended delta rather than
+      // shrinking an already capped residual. Otherwise sub-0.5 luma changes are
+      // rounded away by Uint8ClampedArray and the guarded micro path becomes a no-op.
+      const requestedDelta = guarded
+        ? clamp(residual * blend, -localMaxLumaDelta, localMaxLumaDelta)
+        : clamp(residual, -localMaxLumaDelta, localMaxLumaDelta) * blend;
       const candidateY = current[0] + requestedDelta;
       const currentResidual = residualAbs;
       if (Math.abs(target[0] - candidateY) + 0.015 >= currentResidual) {
