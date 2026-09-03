@@ -10,6 +10,7 @@ import { applyOutlineResidualEscalation } from './outlineResidualEscalation.js';
 import { applyContourMicroInterpolation } from './contourMicroInterpolation.js';
 import { applyInternalResidualRescue } from './internalResidualRescue.js';
 import { applyPostInternalContourDissolve } from './postInternalContourDissolve.js';
+import { applyResidualStructureContinuation } from './residualStructureContinuation.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
@@ -197,6 +198,34 @@ function postInternalContourOptions(options = {}) {
   };
 }
 
+function structureContinuationOptions(options = {}) {
+  return {
+    enabled: options.residualStructureContinuationEnabled !== false,
+    minAlpha: finite(options.residualStructureMinAlpha, 0.006),
+    maxAlpha: finite(options.residualStructureMaxAlpha, 0.30),
+    cleanAlpha: finite(options.residualStructureCleanAlpha, 0.010),
+    maxRadius: Math.max(6, Math.round(finite(options.residualStructureMaxRadius, 18))),
+    minOutlineScore: finite(options.residualStructureMinOutlineScore, 0.70),
+    minOutlineDensity: finite(options.residualStructureMinOutlineDensity, 0.035),
+    minOutlineSamples: Math.max(4, Math.round(finite(options.residualStructureMinOutlineSamples, 6))),
+    minPairAgreement: finite(options.residualStructureMinPairAgreement, 0.62),
+    strongPairAgreement: finite(options.residualStructureStrongPairAgreement, 0.84),
+    hardSceneGuard: finite(options.residualStructureHardSceneGuard, 0.76),
+    lineSceneGuard: finite(options.residualStructureLineSceneGuard, 0.94),
+    strength: finite(options.residualStructureStrength, 0.34),
+    maxBlend: finite(options.residualStructureMaxBlend, 0.20),
+    maxLumaDelta: finite(options.residualStructureMaxLumaDelta, 6),
+    residualSoft: finite(options.residualStructureResidualSoft, 0.38),
+    residualHard: finite(options.residualStructureResidualHard, 3.2),
+    minCorrectedPixels: Math.max(2, Math.round(finite(options.residualStructureMinCorrectedPixels, 3))),
+    minLocalImprovement: finite(options.residualStructureMinLocalImprovement, 0.035),
+    maxMeanBlend: finite(options.residualStructureMaxMeanBlend, 0.20),
+    maxOutlineRatio: finite(options.residualStructureMaxOutlineRatio, 1.002),
+    sceneEdgeOptions: options.sceneEdgeOptions || {},
+    ...(options.residualStructureContinuationOptions || {})
+  };
+}
+
 function measurePostChainOutlineResidual(image, alphaMap, options = {}) {
   const outlineOptions = outlineEscalationOptions(options);
   const residual = measureGeometricOutlineResidual(image, alphaMap, {
@@ -332,12 +361,24 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
+  const structureCandidate = applyResidualStructureContinuation(selected, alphaMap, structureContinuationOptions(options));
+  const residualStructureContinuation = structureCandidate.residualStructureContinuation || null;
+  const residualStructureContinuationAccepted = Boolean(residualStructureContinuation?.accepted);
+  if (residualStructureContinuationAccepted) {
+    selected = {
+      width: structureCandidate.width,
+      height: structureCandidate.height,
+      data: new Uint8ClampedArray(structureCandidate.data)
+    };
+  }
+
   const accepted = structuredAccepted
     || finalAccepted
     || outlineEscalationAccepted
     || contourMicroInterpolationAccepted
     || internalResidualAccepted
-    || postInternalContourAccepted;
+    || postInternalContourAccepted
+    || residualStructureContinuationAccepted;
   let acceptedMode = 'none';
   if (outlineEscalationAccepted) {
     if (structuredAccepted && finalAccepted) acceptedMode = 'structured-smooth+final-visual+outline-escalation';
@@ -364,6 +405,12 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       ? 'post-internal-contour-dissolve'
       : `${acceptedMode}+post-internal-contour`;
   }
+  if (residualStructureContinuationAccepted) {
+    const profile = residualStructureContinuation?.profile || 'structure-continuation';
+    acceptedMode = acceptedMode === 'none'
+      ? profile
+      : `${acceptedMode}+${profile}`;
+  }
 
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
@@ -381,7 +428,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
         || Boolean(outlineResidualEscalation?.attempted)
         || Boolean(contourMicroInterpolation?.attempted)
         || Boolean(internalResidualRescue?.attempted)
-        || Boolean(postInternalContour?.attempted),
+        || Boolean(postInternalContour?.attempted)
+        || Boolean(residualStructureContinuation?.attempted),
       accepted,
       acceptedMode,
       structuredAttempted,
@@ -392,6 +440,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       contourMicroInterpolationAccepted,
       internalResidualAccepted,
       postInternalContourAccepted,
+      residualStructureContinuationAccepted,
       ...gate,
       beforeGlobal,
       afterGlobal: finalGlobal,
@@ -412,6 +461,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       internalResidualRescue,
       postInternalContour,
       postInternalContourDissolve: postInternalContour,
+      residualStructureContinuation,
       postChainOutlineResidual,
       postChainOutlineSceneSafe
     }
