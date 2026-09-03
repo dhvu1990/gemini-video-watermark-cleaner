@@ -1,6 +1,7 @@
 import { applyResidualStructureContinuationCore } from './residualStructureContinuationCore.js';
 import { applySceneProtectedContinuationEscalation } from './sceneProtectedContinuationEscalation.js';
 import { applyInteriorGhostDissolve } from './interiorGhostDissolve.js';
+import { applyGuardedFaintGhostDissolve } from './guardedFaintGhostDissolve.js';
 
 function cloneImage(image) {
   return {
@@ -43,112 +44,175 @@ export function applyResidualStructureContinuation(image, alphaMap, options = {}
   const interiorDiagnostics = interiorGhost.interiorGhostDissolve || null;
   if (interiorDiagnostics?.accepted) selected = cloneImage(interiorGhost);
 
+  const guardedFaintGhost = applyGuardedFaintGhostDissolve(
+    selected,
+    alphaMap,
+    {
+      ...(options.guardedFaintGhostDissolve || {}),
+      enabled: options.guardedFaintGhostDissolve?.enabled !== false,
+      sceneEdgeOptions: options.sceneEdgeOptions || options.guardedFaintGhostDissolve?.sceneEdgeOptions || {}
+    }
+  );
+  const guardedDiagnostics = guardedFaintGhost.guardedFaintGhostDissolve || null;
+  if (guardedDiagnostics?.accepted) selected = cloneImage(guardedFaintGhost);
+
   const coreAccepted = Boolean(coreDiagnostics?.accepted);
   const sceneAccepted = Boolean(sceneDiagnostics?.accepted);
   const interiorAccepted = Boolean(interiorDiagnostics?.accepted);
-  const accepted = coreAccepted || sceneAccepted || interiorAccepted;
+  const guardedAccepted = Boolean(guardedDiagnostics?.accepted);
+  const accepted = coreAccepted || sceneAccepted || interiorAccepted || guardedAccepted;
   const profiles = [];
   if (coreAccepted) appendProfile(profiles, coreDiagnostics?.profile);
   if (sceneAccepted) appendProfile(profiles, sceneDiagnostics?.profile);
   if (interiorAccepted) appendProfile(profiles, interiorDiagnostics?.profile);
+  if (guardedAccepted) appendProfile(profiles, guardedDiagnostics?.profile);
 
-  const finalAfterOutline = interiorAccepted
-    ? interiorDiagnostics.afterOutline
-    : sceneAccepted
-      ? sceneDiagnostics.afterOutline
-      : coreDiagnostics?.afterOutline;
-  const finalAfterGlobal = interiorAccepted
-    ? interiorDiagnostics.afterGlobal
-    : sceneAccepted
-      ? sceneDiagnostics.afterGlobal
-      : coreDiagnostics?.afterGlobal;
+  const finalAfterOutline = guardedAccepted
+    ? guardedDiagnostics.afterOutline
+    : interiorAccepted
+      ? interiorDiagnostics.afterOutline
+      : sceneAccepted
+        ? sceneDiagnostics.afterOutline
+        : coreDiagnostics?.afterOutline;
+  const finalAfterGlobal = guardedAccepted
+    ? guardedDiagnostics.afterGlobal
+    : interiorAccepted
+      ? interiorDiagnostics.afterGlobal
+      : sceneAccepted
+        ? sceneDiagnostics.afterGlobal
+        : coreDiagnostics?.afterGlobal;
 
   return {
     width: selected.width,
     height: selected.height,
     data: selected.data,
     residualStructureContinuation: {
-      eligible: Boolean(coreDiagnostics?.eligible || sceneDiagnostics?.eligible || interiorDiagnostics?.eligible),
-      attempted: Boolean(coreDiagnostics?.attempted || sceneDiagnostics?.attempted || interiorDiagnostics?.attempted),
+      eligible: Boolean(
+        coreDiagnostics?.eligible
+        || sceneDiagnostics?.eligible
+        || interiorDiagnostics?.eligible
+        || guardedDiagnostics?.eligible
+      ),
+      attempted: Boolean(
+        coreDiagnostics?.attempted
+        || sceneDiagnostics?.attempted
+        || interiorDiagnostics?.attempted
+        || guardedDiagnostics?.attempted
+      ),
       accepted,
       profile: profiles.length ? profiles.join('+') : 'none',
-      beforeOutline: coreDiagnostics?.beforeOutline || sceneDiagnostics?.beforeOutline || interiorDiagnostics?.beforeOutline || null,
+      beforeOutline: coreDiagnostics?.beforeOutline
+        || sceneDiagnostics?.beforeOutline
+        || interiorDiagnostics?.beforeOutline
+        || guardedDiagnostics?.beforeOutline
+        || null,
       afterOutline: finalAfterOutline || coreDiagnostics?.afterOutline || null,
-      candidateAfterOutline: interiorDiagnostics?.candidateAfterOutline
+      candidateAfterOutline: guardedDiagnostics?.candidateAfterOutline
+        || interiorDiagnostics?.candidateAfterOutline
         || sceneDiagnostics?.candidateAfterOutline
         || coreDiagnostics?.candidateAfterOutline
         || null,
-      beforeGlobal: coreDiagnostics?.beforeGlobal || sceneDiagnostics?.beforeGlobal || interiorDiagnostics?.beforeGlobal || null,
+      beforeGlobal: coreDiagnostics?.beforeGlobal
+        || sceneDiagnostics?.beforeGlobal
+        || interiorDiagnostics?.beforeGlobal
+        || guardedDiagnostics?.beforeGlobal
+        || null,
       afterGlobal: finalAfterGlobal || coreDiagnostics?.afterGlobal || null,
-      candidateAfterGlobal: interiorDiagnostics?.candidateAfterGlobal
+      candidateAfterGlobal: guardedDiagnostics?.candidateAfterGlobal
+        || interiorDiagnostics?.candidateAfterGlobal
         || sceneDiagnostics?.candidateAfterGlobal
         || coreDiagnostics?.candidateAfterGlobal
         || null,
       correctedPixels: (coreAccepted ? coreDiagnostics.correctedPixels || 0 : 0)
         + (sceneAccepted ? sceneDiagnostics.correctedPixels || 0 : 0)
-        + (interiorAccepted ? interiorDiagnostics.correctedPixels || 0 : 0),
+        + (interiorAccepted ? interiorDiagnostics.correctedPixels || 0 : 0)
+        + (guardedAccepted ? guardedDiagnostics.correctedPixels || 0 : 0),
       candidateCorrectedPixels: (coreDiagnostics?.candidateCorrectedPixels || 0)
         + (sceneDiagnostics?.candidateCorrectedPixels || 0)
-        + (interiorDiagnostics?.candidateCorrectedPixels || 0),
+        + (interiorDiagnostics?.candidateCorrectedPixels || 0)
+        + (guardedDiagnostics?.candidateCorrectedPixels || 0),
       contourCandidates: coreDiagnostics?.contourCandidates || 0,
       pairedCandidates: coreDiagnostics?.pairedCandidates || 0,
       sceneGuardedPixels: (coreDiagnostics?.sceneGuardedPixels || 0)
         + (sceneDiagnostics?.sceneGuardedPixels || 0)
-        + (interiorDiagnostics?.sceneGuardedPixels || 0),
+        + (interiorDiagnostics?.sceneGuardedPixels || 0)
+        + (guardedDiagnostics?.sceneGuardedPixels || 0),
       continuationOverridePixels: (coreDiagnostics?.continuationOverridePixels || 0)
-        + (sceneDiagnostics?.sceneOverridePixels || 0),
+        + (sceneDiagnostics?.sceneOverridePixels || 0)
+        + (guardedDiagnostics?.guardedOverridePixels || 0),
+      faintGhostCorrectedPixels: guardedAccepted ? guardedDiagnostics.faintCorrectedPixels || 0 : 0,
+      guardedFaintGhostOverridePixels: guardedAccepted ? guardedDiagnostics.guardedOverridePixels || 0 : 0,
       curvedPixels: (coreDiagnostics?.curvedPixels || 0) + (sceneDiagnostics?.curvedTexturePixels || 0),
       artifactVetoPixels: (coreDiagnostics?.artifactVetoPixels || 0)
         + (sceneDiagnostics?.artifactVetoPixels || 0)
-        + (interiorDiagnostics?.artifactVetoPixels || 0),
-      meanBlend: interiorAccepted
-        ? interiorDiagnostics.meanBlend
-        : sceneAccepted
-          ? sceneDiagnostics.meanBlend
-          : coreDiagnostics?.meanBlend || 0,
+        + (interiorDiagnostics?.artifactVetoPixels || 0)
+        + (guardedDiagnostics?.artifactVetoPixels || 0),
+      strongStructureVetoPixels: guardedDiagnostics?.strongStructureVetoPixels || 0,
+      meanBlend: guardedAccepted
+        ? guardedDiagnostics.meanBlend
+        : interiorAccepted
+          ? interiorDiagnostics.meanBlend
+          : sceneAccepted
+            ? sceneDiagnostics.meanBlend
+            : coreDiagnostics?.meanBlend || 0,
       candidateMeanBlend: Math.max(
         coreDiagnostics?.candidateMeanBlend || 0,
         sceneDiagnostics?.candidateMeanBlend || 0,
-        interiorDiagnostics?.candidateMeanBlend || 0
+        interiorDiagnostics?.candidateMeanBlend || 0,
+        guardedDiagnostics?.candidateMeanBlend || 0
       ),
-      meanPairAgreement: sceneAccepted
-        ? sceneDiagnostics.meanPairAgreement
-        : coreDiagnostics?.meanPairAgreement || 0,
-      localBeforeResidual: interiorAccepted
-        ? interiorDiagnostics.localBeforeResidual
+      meanPairAgreement: guardedAccepted
+        ? guardedDiagnostics.meanAgreement
         : sceneAccepted
-          ? sceneDiagnostics.localBeforeResidual
-          : coreDiagnostics?.localBeforeResidual || 0,
-      localAfterResidual: interiorAccepted
-        ? interiorDiagnostics.localAfterResidual
-        : sceneAccepted
-          ? sceneDiagnostics.localAfterResidual
-          : coreDiagnostics?.localAfterResidual || 0,
-      localImprovement: interiorAccepted
-        ? interiorDiagnostics.localImprovement
-        : sceneAccepted
-          ? sceneDiagnostics.localImprovement
-          : coreDiagnostics?.localImprovement || 0,
+          ? sceneDiagnostics.meanPairAgreement
+          : coreDiagnostics?.meanPairAgreement || 0,
+      localBeforeResidual: guardedAccepted
+        ? guardedDiagnostics.localBeforeResidual
+        : interiorAccepted
+          ? interiorDiagnostics.localBeforeResidual
+          : sceneAccepted
+            ? sceneDiagnostics.localBeforeResidual
+            : coreDiagnostics?.localBeforeResidual || 0,
+      localAfterResidual: guardedAccepted
+        ? guardedDiagnostics.localAfterResidual
+        : interiorAccepted
+          ? interiorDiagnostics.localAfterResidual
+          : sceneAccepted
+            ? sceneDiagnostics.localAfterResidual
+            : coreDiagnostics?.localAfterResidual || 0,
+      localImprovement: guardedAccepted
+        ? guardedDiagnostics.localImprovement
+        : interiorAccepted
+          ? interiorDiagnostics.localImprovement
+          : sceneAccepted
+            ? sceneDiagnostics.localImprovement
+            : coreDiagnostics?.localImprovement || 0,
       maxAppliedLumaDelta: Math.max(
         coreDiagnostics?.maxAppliedLumaDelta || 0,
         sceneDiagnostics?.maxAppliedLumaDelta || 0,
-        interiorDiagnostics?.maxAppliedLumaDelta || 0
+        interiorDiagnostics?.maxAppliedLumaDelta || 0,
+        guardedDiagnostics?.maxAppliedLumaDelta || 0
       ),
       outlineSafe: (coreDiagnostics?.outlineSafe ?? true)
         && (sceneDiagnostics?.outlineSafe ?? true)
-        && (interiorDiagnostics?.outlineSafe ?? true),
+        && (interiorDiagnostics?.outlineSafe ?? true)
+        && (guardedDiagnostics?.outlineSafe ?? true),
       globalSafe: (coreDiagnostics?.globalSafe ?? true)
         && (sceneDiagnostics?.globalSafe ?? true)
-        && (interiorDiagnostics?.globalSafe ?? true),
+        && (interiorDiagnostics?.globalSafe ?? true)
+        && (guardedDiagnostics?.globalSafe ?? true),
       artifactSafe: (coreDiagnostics?.artifactSafe ?? true)
         && (sceneDiagnostics?.artifactSafe ?? true)
-        && (interiorDiagnostics?.artifactSafe ?? true),
+        && (interiorDiagnostics?.artifactSafe ?? true)
+        && (guardedDiagnostics?.artifactSafe ?? true),
       coreAccepted,
       sceneProtectedContinuationEscalationAccepted: sceneAccepted,
       interiorGhostDissolveAccepted: interiorAccepted,
+      guardedFaintGhostDissolveAccepted: guardedAccepted,
       core: coreDiagnostics,
       sceneProtectedContinuationEscalation: sceneDiagnostics,
-      interiorGhostDissolve: interiorDiagnostics
+      interiorGhostDissolve: interiorDiagnostics,
+      guardedFaintGhostDissolve: guardedDiagnostics
     }
   };
 }
