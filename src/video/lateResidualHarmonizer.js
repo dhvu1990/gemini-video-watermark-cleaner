@@ -28,6 +28,18 @@ function localGradient(image, x, y) {
   const gy = (lumaAt(image, x, y + 1) - lumaAt(image, x, y - 1)) * 0.5;
   return Math.hypot(gx, gy);
 }
+function localContrastAt(image, x, y) {
+  if (x < 1 || y < 1 || x >= image.width - 1 || y >= image.height - 1) return Infinity;
+  const center = lumaAt(image, x, y);
+  let peak = 0;
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dy === 0) continue;
+      peak = Math.max(peak, Math.abs(center - lumaAt(image, x + dx, y + dy)));
+    }
+  }
+  return peak;
+}
 function median(values) {
   if (!values.length) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -129,6 +141,7 @@ function collectReferences(image, alphaMap, geometry, options = {}) {
   const radius = Math.max(4, Math.round(Number(options.referenceRadius ?? 9)));
   const maxAlpha = Number.isFinite(options.referenceMaxAlpha) ? options.referenceMaxAlpha : 0.010;
   const gradientMax = Number.isFinite(options.referenceGradientMax) ? options.referenceGradientMax : 20;
+  const localContrastMax = Number.isFinite(options.referenceLocalContrastMax) ? options.referenceLocalContrastMax : 24;
   const samples = [];
   const x0 = Math.max(1, geometry.minX - radius);
   const x1 = Math.min(image.width - 2, geometry.maxX + radius);
@@ -142,6 +155,7 @@ function collectReferences(image, alphaMap, geometry, options = {}) {
       if (!outside) continue;
       const gradient = localGradient(image, x, y);
       if (gradient > gradientMax) continue;
+      if (localContrastAt(image, x, y) > localContrastMax) continue;
       const rgb = rgbAt(image, x, y);
       if (!rgb) continue;
       samples.push({ x, y, rgb, yValue: luma(rgb), gradient });
@@ -256,6 +270,8 @@ function axisSample(image, alphaMap, geometry, x, y, axis, options = {}) {
   if (axisDistance > halfWidth) return null;
   const centerWeight = 1 - smoothstep(0, halfWidth, axisDistance);
   if (centerWeight <= 0.02) return null;
+  const axisLocalContrastMax = Number.isFinite(options.axisLocalContrastMax) ? options.axisLocalContrastMax : 30;
+  if (localContrastAt(image, x, y) > axisLocalContrastMax) return null;
   const target = axisTarget(image, alphaMap, geometry, x, y, axis, options);
   if (!target) return null;
   const current = rgbAt(image, x, y);
@@ -312,7 +328,7 @@ function buildAxisCandidate(image, alphaMap, geometry, options = {}) {
         const sample = axisSample(image, alphaMap, geometry, x, y, axis, options);
         if (!sample) {
           const scene = sceneEdgeProtectionAt(image, alphaMap, x, y, options.sceneEdgeOptions || {});
-          if (scene.weight >= Number(options.axisHardSceneGuard ?? 0.64)) sceneGuardedPixels += 1;
+          if (scene.weight >= Number(options.axisHardSceneGuard ?? 0.64) || localContrastAt(image, x, y) > Number(options.axisLocalContrastMax ?? 30)) sceneGuardedPixels += 1;
           continue;
         }
         const residualGate = smoothstep(Number(options.axisResidualSoft ?? 0.55), Number(options.axisResidualHard ?? 4.5), sample.residualAbs);
@@ -361,6 +377,7 @@ function measurePlaneMismatch(image, alphaMap, geometry, planes, stats, options 
   const maxAlpha = Number.isFinite(options.planeMaxAlpha) ? options.planeMaxAlpha : 0.60;
   const gradientMax = Number.isFinite(options.planeGradientMax) ? options.planeGradientMax : (bright ? 24 : 12);
   const hardSceneGuard = Number.isFinite(options.planeHardSceneGuard) ? options.planeHardSceneGuard : (bright ? 0.82 : 0.28);
+  const localContrastMax = Number.isFinite(options.planeLocalContrastMax) ? options.planeLocalContrastMax : (bright ? 28 : 18);
   let sum = 0;
   let weightSum = 0;
   let samples = 0;
@@ -371,6 +388,7 @@ function measurePlaneMismatch(image, alphaMap, geometry, planes, stats, options 
       if (alpha < minAlpha || alpha > maxAlpha) continue;
       const gradient = localGradient(image, x, y);
       if (gradient > gradientMax) continue;
+      if (localContrastAt(image, x, y) > localContrastMax) continue;
       const scene = sceneEdgeProtectionAt(image, alphaMap, x, y, options.sceneEdgeOptions || {});
       if (scene.weight >= hardSceneGuard) continue;
       const current = rgbAt(image, x, y);
@@ -395,6 +413,7 @@ function buildPlaneCandidate(image, alphaMap, geometry, planes, stats, crossingE
   const maxAlpha = Number.isFinite(options.planeMaxAlpha) ? options.planeMaxAlpha : 0.60;
   const gradientMax = Number.isFinite(options.planeGradientMax) ? options.planeGradientMax : (bright ? 24 : 12);
   const hardSceneGuard = Number.isFinite(options.planeHardSceneGuard) ? options.planeHardSceneGuard : (bright ? 0.82 : 0.28);
+  const localContrastMax = Number.isFinite(options.planeLocalContrastMax) ? options.planeLocalContrastMax : (bright ? 28 : 18);
   const strength = clamp(Number(options.planeStrength ?? (bright ? 0.30 : 0.16)), 0.08, bright ? 0.38 : 0.22);
   const maxBlend = clamp(Number(options.planeMaxBlend ?? (bright ? 0.18 : 0.085)), 0.04, bright ? 0.22 : 0.11);
   const maxChannelDelta = clamp(Number(options.planeMaxChannelDelta ?? (bright ? 6.0 : 3.0)), 1.5, bright ? 7.0 : 4.0);
@@ -414,6 +433,10 @@ function buildPlaneCandidate(image, alphaMap, geometry, planes, stats, crossingE
       if (alpha < minAlpha || alpha > maxAlpha) continue;
       const gradient = localGradient(image, x, y);
       if (gradient > gradientMax) continue;
+      if (localContrastAt(image, x, y) > localContrastMax) {
+        sceneGuardedPixels += 1;
+        continue;
+      }
       const scene = sceneEdgeProtectionAt(image, alphaMap, x, y, options.sceneEdgeOptions || {});
       if (scene.weight >= hardSceneGuard) {
         sceneGuardedPixels += 1;
