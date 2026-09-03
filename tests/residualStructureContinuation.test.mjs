@@ -82,7 +82,9 @@ test('strong two-sided tangent agreement can continue a scene line through resid
     maxMeanBlend: 0.24,
     localMargin: 20,
     samplesPerSide: 1,
-    maxRadius: 24
+    maxRadius: 24,
+    sceneProtectedContinuationEscalation: { enabled: false },
+    interiorGhostDissolve: { enabled: false }
   });
   const diagnostics = result.residualStructureContinuation;
   assert.equal(diagnostics.attempted, true, JSON.stringify(diagnostics));
@@ -93,9 +95,9 @@ test('strong two-sided tangent agreement can continue a scene line through resid
   }
 });
 
-test('production continuation stays bounded and rollback-safe', () => {
+test('production v1.0.119 continuation core stays bounded and rollback-safe', () => {
   const source = fs.readFileSync(
-    new URL('../src/video/residualStructureContinuation.js', import.meta.url),
+    new URL('../src/video/residualStructureContinuationCore.js', import.meta.url),
     'utf8'
   );
   assert.match(source, /maxBlend \?\? 0\.20/);
@@ -104,6 +106,21 @@ test('production continuation stays bounded and rollback-safe', () => {
   assert.match(source, /lineSceneGuard\) \? options\.lineSceneGuard : 0\.94/);
   assert.match(source, /afterGlobal\.total <= beforeGlobal\.total \* 1\.003 \+ 0\.025/);
   assert.match(source, /optionalDeltaSafe\(afterGlobal\.darkCandidateMean, beforeGlobal\.darkCandidateMean, 0\.20\)/);
+});
+
+test('v1.0.120 wrapper runs core then scene escalation then interior ghost dissolve', () => {
+  const source = fs.readFileSync(
+    new URL('../src/video/residualStructureContinuation.js', import.meta.url),
+    'utf8'
+  );
+  const coreIndex = source.indexOf('applyResidualStructureContinuationCore');
+  const sceneIndex = source.lastIndexOf('applySceneProtectedContinuationEscalation');
+  const interiorIndex = source.lastIndexOf('applyInteriorGhostDissolve');
+  assert.ok(coreIndex >= 0);
+  assert.ok(sceneIndex > coreIndex);
+  assert.ok(interiorIndex > sceneIndex);
+  assert.match(source, /sceneProtectedContinuationEscalationAccepted/);
+  assert.match(source, /interiorGhostDissolveAccepted/);
 });
 
 test('structure continuation runs after the v1.0.118 contour sweep', () => {
