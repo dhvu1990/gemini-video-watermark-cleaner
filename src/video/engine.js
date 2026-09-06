@@ -106,7 +106,16 @@ function cropImageData(imageData, position) {
   return { width, height, data };
 }
 
-export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePolish, history = [], allowMaskedDonors = false) {
+export function repairPaddedRegion(
+  paddedOriginal,
+  inner,
+  alphaMap,
+  gain,
+  edgePolish,
+  history = [],
+  allowMaskedDonors = false,
+  detectionConfidence = null
+) {
   const original = cropRegion(paddedOriginal, inner.offsetX, inner.offsetY, inner.width, inner.height);
   let cleaned = inverseAlphaRestore(original, alphaMap, gain);
   cleaned = applyEdgePolish(cleaned, alphaMap, edgePolish);
@@ -148,7 +157,8 @@ export function repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, edgePo
     dualFinished,
     paddedAlpha,
     dualFinished.smoothBackground || dualFinished.dualRingFinish?.smoothBackground || {},
-    dualFinished.structuredRing || dualFinished.dualRingFinish?.structuredRing || {}
+    dualFinished.structuredRing || dualFinished.dualRingFinish?.structuredRing || {},
+    { detectionConfidence }
   );
   if (structuredSmoothRescue.structuredSmoothRescue?.accepted) {
     const rescueDiagnostics = structuredSmoothRescue.structuredSmoothRescue;
@@ -211,7 +221,16 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
   const padded = cropImageData(frame.imageData, expanded);
   const history = frames.slice(0, index).map((item) => cropImageData(item.imageData, expanded)).slice(-MAX_ATLAS_HISTORY);
   const inner = { offsetX: expanded.offsetX, offsetY: expanded.offsetY, width: detection.position.width, height: detection.position.height };
-  const repaired = repairPaddedRegion(padded, inner, detection.alphaMap, detection.alphaGain ?? 1, edgePolish, history, false);
+  const repaired = repairPaddedRegion(
+    padded,
+    inner,
+    detection.alphaMap,
+    detection.alphaGain ?? 1,
+    edgePolish,
+    history,
+    false,
+    detection.confidence
+  );
   return {
     timestamp: frame.timestamp,
     original: repaired.original,
@@ -324,6 +343,11 @@ export async function cleanVideo(file, options = {}) {
   }
   const alphaMap = manual || detectedRegion ? await getVideoAlphaMap(position.width) : analysis.internalDetection.alphaMap;
   const requestedGain = Number.isFinite(options.alphaGain) ? options.alphaGain : (analysis?.internalDetection.alphaGain ?? 1);
+  const detectionConfidence = manual
+    ? 1
+    : (Number.isFinite(options.detectionConfidence)
+      ? options.detectionConfidence
+      : (Number.isFinite(analysis?.internalDetection?.confidence) ? analysis.internalDetection.confidence : null));
   const expanded = expandedRegion(position, metadata.width, metadata.height, REPAIR_PADDING);
   const inner = { offsetX: expanded.offsetX, offsetY: expanded.offsetY, width: position.width, height: position.height };
   const canvas = createCanvas(metadata.width, metadata.height);
@@ -365,7 +389,16 @@ export async function cleanVideo(file, options = {}) {
           if (shotChanged) { previousGain = Number.NaN; previousTemporal = null; history = []; }
           const gain = frameGain(original, alphaMap, requestedGain, previousGain, options.adaptiveAlpha !== false, score);
           previousGain = gain;
-          const repaired = repairPaddedRegion(paddedOriginal, inner, alphaMap, gain, options.edgePolish ?? 0.35, options.temporalStabilize !== false ? history : [], options.temporalStabilize !== false);
+          const repaired = repairPaddedRegion(
+            paddedOriginal,
+            inner,
+            alphaMap,
+            gain,
+            options.edgePolish ?? 0.35,
+            options.temporalStabilize !== false ? history : [],
+            options.temporalStabilize !== false,
+            detectionConfidence
+          );
           let processed = repaired.cleaned;
           if (repaired.atlasSummary?.donorCount >= 3) { atlasFrames++; atlasDonorsPeak = Math.max(atlasDonorsPeak, repaired.atlasSummary.donorCount); }
           if (repaired.temporalDonorAcceptance?.attempted) {
@@ -406,7 +439,7 @@ export async function cleanVideo(file, options = {}) {
     return {
       buffer: target.buffer,
       meta: {
-        version: '1.0.20', position, alphaGain: previousGain, processedFrames, skippedFrames, audio: audioResult,
+        version: '1.0.20', position, alphaGain: previousGain, detectionConfidence, processedFrames, skippedFrames, audio: audioResult,
         repair: {
           padding: REPAIR_PADDING, paddedTexture: true, multiFrameAtlas: options.temporalStabilize !== false,
           hybridCoreRing: true, normalEdgeBridge: true, microEdgeFinish: true, quadrantChromaFinish: true,
@@ -420,7 +453,7 @@ export async function cleanVideo(file, options = {}) {
           dualRingFrames, dualRingPixelsPeak,
           meanDualRingImprovement: dualRingFrames ? dualRingImprovementSum / dualRingFrames : 0
         },
-        detection: analysis?.detection || (detectedRegion ? { detected: true, position } : null)
+        detection: analysis?.detection || (detectedRegion ? { detected: true, position, confidence: detectionConfidence } : null)
       }
     };
   } finally { input.dispose(); }
