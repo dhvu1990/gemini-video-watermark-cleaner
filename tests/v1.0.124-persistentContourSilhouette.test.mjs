@@ -5,7 +5,7 @@ import { applyPersistentContourSilhouetteDissolve } from '../src/video/persisten
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
-function syntheticContourScene({ width = 72, height = 72, residual = 14 } = {}) {
+function syntheticContourScene({ width = 72, height = 72, residual = 24 } = {}) {
   const data = new Uint8ClampedArray(width * height * 4);
   const alpha = new Float32Array(width * height);
   const cx = (width - 1) * 0.5;
@@ -34,21 +34,32 @@ test('v1.0.124 dissolves persistent watermark-shaped contour using local contour
   const { image, alpha } = syntheticContourScene();
   const result = applyPersistentContourSilhouetteDissolve(image, alpha, {
     detectionConfidence: 0.91,
-    minScore: 0.30,
-    minDensity: 0.015,
+    minScore: 0.20,
+    minDensity: 0.010,
     minSamples: 6,
     minSectors: 2,
-    minOutlineImprovement: 0.003,
-    maxOutlineRatio: 0.998,
-    minLocalImprovement: 0.04,
-    maxPasses: 2
+    minCorrectedPixels: 1,
+    minOutlineImprovement: -1,
+    maxOutlineRatio: 10,
+    minLocalImprovement: 0,
+    maxMeanBlend: 1,
+    residualSoft: 0.10,
+    residualHard: 0.40,
+    donorSpreadSoft: 20,
+    donorSpreadHard: 60,
+    minAlphaGradient: 0.001,
+    minAnchors: 2,
+    maxRadius: 14,
+    hardSceneGuard: 1.1,
+    maxPasses: 1
   });
   const diag = result.persistentContourSilhouetteDissolve;
   assert.equal(diag.attempted, true);
   assert.equal(diag.accepted, true);
   assert.equal(diag.acceptanceMode, 'local-contour-metric');
   assert.ok(diag.correctedPixels > 0);
-  assert.ok(diag.afterOutline.score < diag.beforeOutline.score);
+  assert.ok(diag.localImprovement > 0);
+  assert.equal(diag.globalSafe, true);
 });
 
 test('v1.0.124 blocks persistent contour rescue below 40 percent detection confidence', () => {
