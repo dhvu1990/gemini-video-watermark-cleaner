@@ -1,6 +1,7 @@
 import { measurePostCleanupResidual } from './edgeBridge.js';
+import { measureHighContrastAdjacency, classifyHighContrastAdjacency } from './highContrastAdjacencyDiagnostics.js';
 import { measureGeometricOutlineResidual } from './protectedResidualRescue.js';
-import { sceneEdgeProtectionAt } from './sceneEdgeProtection.js';
+import { measureCrossingSceneEdgeRisk, sceneEdgeProtectionAt } from './sceneEdgeProtection.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function clampByte(value) { return Math.max(0, Math.min(255, Math.round(value))); }
@@ -208,6 +209,53 @@ function outlineOptions(options = {}) {
   };
 }
 
+export function evaluateContourTextureRisk(image, alphaMap, options = {}) {
+  const enabled = options.globalTextureGuard !== false;
+  const sceneEdge = measureCrossingSceneEdgeRisk(image, alphaMap, options.sceneEdgeOptions || {});
+  const adjacency = measureHighContrastAdjacency(image, alphaMap, options.highContrastAdjacencyOptions || {});
+  const adjacencyClass = classifyHighContrastAdjacency(adjacency, options.highContrastAdjacencyOptions || {});
+  const mediumSceneScore = Number.isFinite(options.mediumSceneBlockScore) ? options.mediumSceneBlockScore : 0.24;
+  const mediumSceneDensity = Number.isFinite(options.mediumSceneBlockDensity) ? options.mediumSceneBlockDensity : 0.020;
+  const mediumSceneContinuity = Number.isFinite(options.mediumSceneBlockContinuity) ? options.mediumSceneBlockContinuity : 0.008;
+  const combinedMediumSceneScore = Number.isFinite(options.combinedMediumSceneScore) ? options.combinedMediumSceneScore : 0.18;
+  const denseMediumAdjacencyScore = Number.isFinite(options.denseMediumAdjacencyScore) ? options.denseMediumAdjacencyScore : 0.34;
+  const denseMediumStraddleDensity = Number.isFinite(options.denseMediumStraddleDensity) ? options.denseMediumStraddleDensity : 0.008;
+
+  const mediumSceneBlocked = sceneEdge.level === 'medium'
+    && sceneEdge.score >= mediumSceneScore
+    && sceneEdge.density >= mediumSceneDensity
+    && sceneEdge.continuityDensity >= mediumSceneContinuity;
+  const sceneBlocked = sceneEdge.protect || sceneEdge.level === 'high' || mediumSceneBlocked;
+  const highAdjacencyBlocked = adjacencyClass.level === 'high';
+  const combinedMedium = adjacencyClass.level === 'medium'
+    && (sceneEdge.protect || sceneEdge.level === 'medium' || sceneEdge.score >= combinedMediumSceneScore);
+  const denseMediumAdjacency = adjacencyClass.level === 'medium'
+    && adjacency.score >= denseMediumAdjacencyScore
+    && adjacency.straddleDensity >= denseMediumStraddleDensity;
+  const blocked = enabled && (sceneBlocked || highAdjacencyBlocked || combinedMedium || denseMediumAdjacency);
+
+  let reason = 'safe';
+  if (!enabled) reason = 'disabled';
+  else if (sceneEdge.protect || sceneEdge.level === 'high') reason = 'crossing-scene-edge';
+  else if (mediumSceneBlocked) reason = 'continuous-medium-scene-edge';
+  else if (highAdjacencyBlocked) reason = 'high-contrast-adjacency';
+  else if (combinedMedium) reason = 'combined-medium-texture-risk';
+  else if (denseMediumAdjacency) reason = 'dense-medium-adjacency';
+
+  return {
+    enabled,
+    blocked,
+    reason,
+    sceneEdge,
+    adjacency,
+    adjacencyLevel: adjacencyClass.level,
+    adjacencyReason: adjacencyClass.reason,
+    mediumSceneBlocked,
+    combinedMedium,
+    denseMediumAdjacency
+  };
+}
+
 function buildCandidate(image, alphaMap, options = {}) {
   const data = new Uint8ClampedArray(image.data);
   const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.018;
@@ -382,15 +430,17 @@ function assessCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, optio
 export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
   const beforeOutline = measureGeometricOutlineResidual(image, alphaMap, outlineOptions(options));
   const beforeGlobal = measurePostCleanupResidual(image, alphaMap);
+  const globalTextureRisk = evaluateContourTextureRisk(image, alphaMap, options);
   const minScore = Number.isFinite(options.minScore) ? options.minScore : 1.10;
   const minDensity = Number.isFinite(options.minDensity) ? options.minDensity : 0.055;
   const minSamples = Math.max(8, Math.round(Number(options.minSamples ?? 10)));
   const minSectors = Math.max(2, Math.round(Number(options.minSectors ?? 2)));
-  const eligible = options.enabled !== false
+  const outlineEligible = options.enabled !== false
     && beforeOutline.score >= minScore
     && beforeOutline.candidateDensity >= minDensity
     && beforeOutline.samples >= minSamples
     && beforeOutline.sectorSupport >= minSectors;
+  const eligible = outlineEligible && !globalTextureRisk.blocked;
 
   if (!eligible) {
     return {
@@ -399,9 +449,12 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
       data: new Uint8ClampedArray(image.data),
       contourMicroInterpolation: {
         eligible,
+        outlineEligible,
         attempted: false,
         accepted: false,
-        acceptanceMode: 'ineligible',
+        acceptanceMode: globalTextureRisk.blocked ? 'global-texture-guard' : 'ineligible',
+        blockedByTextureRisk: globalTextureRisk.blocked,
+        globalTextureRisk,
         beforeOutline,
         afterOutline: beforeOutline,
         beforeGlobal,
@@ -451,9 +504,12 @@ export function applyContourMicroInterpolation(image, alphaMap, options = {}) {
     data: accepted ? selected.data : new Uint8ClampedArray(image.data),
     contourMicroInterpolation: {
       eligible,
+      outlineEligible,
       attempted: true,
       accepted,
       acceptanceMode: accepted ? finalAssessment.acceptanceMode : 'rejected',
+      blockedByTextureRisk: false,
+      globalTextureRisk,
       standardAccepted: accepted ? finalAssessment.standardAccepted : false,
       localBandAccepted: accepted ? finalAssessment.localBandAccepted : false,
       globalSafe: finalAssessment.globalSafe,
