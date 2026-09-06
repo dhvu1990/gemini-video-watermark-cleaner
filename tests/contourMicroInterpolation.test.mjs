@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { applyContourMicroInterpolation, buildContourSafetyBand } from '../src/video/contourMicroInterpolation.js';
+import {
+  applyContourMicroInterpolation,
+  buildContourSafetyBand,
+  evaluateContourTextureRisk
+} from '../src/video/contourMicroInterpolation.js';
 
 function flatImage(width = 24, height = 24, value = 90) {
   const data = new Uint8ClampedArray(width * height * 4);
@@ -57,4 +61,25 @@ test('micro interpolation keeps conservative local and global rollback checks', 
   assert.match(source, /afterGlobal\.total <= beforeGlobal\.total \* 1\.004 \+ 0\.03/);
   assert.match(source, /afterGlobal\.luma <= beforeGlobal\.luma \* 1\.005 \+ 0\.03/);
   assert.match(source, /afterGlobal\.chroma <= beforeGlobal\.chroma \* 1\.004 \+ 0\.25/);
+});
+
+test('v1.0.123 globally blocks contour interpolation on structured texture risk', () => {
+  const source = readFileSync(new URL('../src/video/contourMicroInterpolation.js', import.meta.url), 'utf8');
+  assert.match(source, /measureCrossingSceneEdgeRisk/);
+  assert.match(source, /measureHighContrastAdjacency/);
+  assert.match(source, /classifyHighContrastAdjacency/);
+  assert.match(source, /const eligible = outlineEligible && !globalTextureRisk\.blocked/);
+  assert.match(source, /acceptanceMode: globalTextureRisk\.blocked \? 'global-texture-guard' : 'ineligible'/);
+});
+
+test('texture-risk helper stays permissive on a flat empty scene', () => {
+  const image = flatImage(72, 72, 80);
+  const alphaMap = new Float32Array(image.width * image.height);
+  for (let y = 24; y <= 48; y++) {
+    const half = Math.max(1, 12 - Math.abs(y - 36));
+    for (let x = 36 - half; x <= 36 + half; x++) alphaMap[y * image.width + x] = 0.10;
+  }
+  const risk = evaluateContourTextureRisk(image, alphaMap);
+  assert.equal(risk.blocked, false);
+  assert.equal(risk.reason, 'safe');
 });
