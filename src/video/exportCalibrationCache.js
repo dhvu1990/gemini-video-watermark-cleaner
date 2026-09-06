@@ -39,7 +39,8 @@ function cloneCalibration(entry = null) {
     alphaMap: new Float32Array(entry.alphaMap),
     alphaGain: finite(entry.alphaGain, null),
     position: { ...entry.position },
-    candidateId: entry.candidateId || null
+    candidateId: entry.candidateId || null,
+    confidence: finite(entry.confidence, null)
   };
 }
 
@@ -56,7 +57,8 @@ export function createDetectionCalibrationCache(maxEntries = 32) {
       alphaMap: new Float32Array(alphaMap),
       alphaGain: finite(detection?.alphaGain, null),
       position,
-      candidateId: detection?.candidateId || null
+      candidateId: detection?.candidateId || null,
+      confidence: finite(detection?.confidence, null)
     };
     if (cache.has(key)) cache.delete(key);
     cache.set(key, entry);
