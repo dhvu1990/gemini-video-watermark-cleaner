@@ -66,7 +66,8 @@ test('anti-streak runtime summary is diagnostic-only and preserves the current n
     reference,
     paddedAlpha,
     reference.smoothBackground || reference.dualRingFinish?.smoothBackground || {},
-    reference.structuredRing || reference.dualRingFinish?.structuredRing || {}
+    reference.structuredRing || reference.dualRingFinish?.structuredRing || {},
+    { detectionConfidence: null }
   );
   if (structuredReference.structuredSmoothRescue?.accepted) {
     reference = {

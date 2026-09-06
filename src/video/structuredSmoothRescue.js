@@ -11,6 +11,7 @@ import { applyContourMicroInterpolation } from './contourMicroInterpolation.js';
 import { applyInternalResidualRescue } from './internalResidualRescue.js';
 import { applyPostInternalContourDissolve } from './postInternalContourDissolve.js';
 import { applyResidualStructureContinuation } from './residualStructureContinuation.js';
+import { applyPersistentContourSilhouetteDissolve } from './persistentContourSilhouetteDissolve.js';
 import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
@@ -22,6 +23,25 @@ function ratioImprovement(before, after) {
   return before > 1e-9 ? (before - after) / before : 0;
 }
 
+function confidencePolicy(options = {}) {
+  const raw = Number(options.detectionConfidence);
+  if (!Number.isFinite(raw)) {
+    return { known: false, confidence: null, mode: 'unknown', aggressiveEnabled: true, scale: 1 };
+  }
+  const confidence = Math.max(0, Math.min(1, raw));
+  if (confidence < 0.40) {
+    return { known: true, confidence, mode: 'low', aggressiveEnabled: false, scale: 0 };
+  }
+  if (confidence < 0.65) {
+    return { known: true, confidence, mode: 'medium', aggressiveEnabled: true, scale: 0.68 };
+  }
+  return { known: true, confidence, mode: 'high', aggressiveEnabled: true, scale: 1 };
+}
+
+function scaled(value, scale, floor = 0) {
+  return Math.max(floor, value * scale);
+}
+
 export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoothAnalysis = {}, structuredRing = {}, options = {}) {
   const aligned = measureStructuredRingResidual(image, alphaMap);
   const density = alphaMap.length ? aligned.samples / alphaMap.length : 0;
@@ -29,6 +49,7 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
   const priorAfter = finite(structuredRing?.alignedAfter?.score, priorBefore);
   const priorImprovement = ratioImprovement(priorBefore, priorAfter);
   const sceneEdge = measureCrossingSceneEdgeRisk(image, alphaMap, options.sceneEdgeOptions || {});
+  const detectionConfidencePolicy = confidencePolicy(options);
 
   const residualStrong = aligned.score >= finite(options.minAlignedScore, 1.45)
     && density >= finite(options.minAlignedDensity, 0.018);
@@ -46,7 +67,12 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
     && finite(sceneEdge.score, 1) <= finite(options.maxSceneEdgeScore, 0.30);
 
   return {
-    eligible: options.enabled !== false && residualStrong && priorLowGain && nearSmooth && sceneSafe,
+    eligible: options.enabled !== false
+      && detectionConfidencePolicy.aggressiveEnabled
+      && residualStrong
+      && priorLowGain
+      && nearSmooth
+      && sceneSafe,
     residualStrong,
     priorLowGain,
     nearSmooth,
@@ -54,27 +80,33 @@ export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoot
     aligned,
     alignedDensity: density,
     priorImprovement,
-    sceneEdge
+    sceneEdge,
+    detectionConfidencePolicy
   };
 }
 
 function finalResidualOptions(options = {}) {
+  const policy = confidencePolicy(options);
   return {
+    enabled: options.finalResidualEnabled !== false && policy.aggressiveEnabled,
     minScore: finite(options.finalResidualMinScore, 1.55),
     minDensity: finite(options.finalResidualMinDensity, 0.16),
     minSamples: Math.max(8, Math.round(finite(options.finalResidualMinSamples, 18))),
     minImprovement: finite(options.finalResidualMinImprovement, 0.02),
-    strength: finite(options.finalResidualStrength, 0.44),
-    maxBlend: finite(options.finalResidualMaxBlend, 0.38),
+    strength: scaled(finite(options.finalResidualStrength, 0.44), policy.scale, 0),
+    maxBlend: scaled(finite(options.finalResidualMaxBlend, 0.38), policy.scale, 0),
     maxLumaDelta: finite(options.finalResidualMaxLumaDelta, 10),
-    hardSceneGuard: finite(options.finalResidualHardSceneGuard, 0.66),
+    hardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.finalResidualHardSceneGuard, 0.66), 0.56)
+      : finite(options.finalResidualHardSceneGuard, 0.66),
     ...(options.finalResidualOptions || {})
   };
 }
 
 function outlineEscalationOptions(options = {}) {
+  const policy = confidencePolicy(options);
   return {
-    enabled: options.outlineEscalationEnabled !== false,
+    enabled: options.outlineEscalationEnabled !== false && policy.aggressiveEnabled,
     minOutlineScore: finite(options.outlineEscalationMinScore, 1.15),
     minOutlineDensity: finite(options.outlineEscalationMinDensity, 0.075),
     minOutlineSamples: Math.max(8, Math.round(finite(options.outlineEscalationMinSamples, 12))),
@@ -83,10 +115,12 @@ function outlineEscalationOptions(options = {}) {
     maxBodyScore: finite(options.outlineEscalationMaxBodyScore, 2.35),
     maxBodyDensity: finite(options.outlineEscalationMaxBodyDensity, 0.38),
     maxSceneGuardedRatio: finite(options.outlineEscalationMaxSceneGuardedRatio, 0.68),
-    strength: finite(options.outlineEscalationStrength, 0.58),
-    maxBlend: finite(options.outlineEscalationMaxBlend, 0.48),
+    strength: scaled(finite(options.outlineEscalationStrength, 0.58), policy.scale, 0),
+    maxBlend: scaled(finite(options.outlineEscalationMaxBlend, 0.48), policy.scale, 0),
     maxLumaDelta: finite(options.outlineEscalationMaxLumaDelta, 11),
-    hardSceneGuard: finite(options.outlineEscalationHardSceneGuard, 0.62),
+    hardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.outlineEscalationHardSceneGuard, 0.62), 0.48)
+      : finite(options.outlineEscalationHardSceneGuard, 0.62),
     minImprovement: finite(options.outlineEscalationMinImprovement, 0.035),
     partialSceneProtection: options.outlineEscalationPartialSceneProtection !== false,
     maxPartialSceneGuardedRatio: finite(options.outlineEscalationMaxPartialSceneGuardedRatio, 0.68),
@@ -98,21 +132,23 @@ function outlineEscalationOptions(options = {}) {
     partialMinSafeSampleDensity: finite(options.outlineEscalationPartialMinSafeSampleDensity, 0.025),
     maxPartialSceneEdgeDensity: finite(options.outlineEscalationMaxPartialSceneEdgeDensity, 0.42),
     maxPartialSceneEdgeContinuityDensity: finite(options.outlineEscalationMaxPartialSceneEdgeContinuityDensity, 0.34),
-    partialStrength: finite(options.outlineEscalationPartialStrength, 0.46),
-    partialMaxBlend: finite(options.outlineEscalationPartialMaxBlend, 0.36),
+    partialStrength: scaled(finite(options.outlineEscalationPartialStrength, 0.46), policy.scale, 0),
+    partialMaxBlend: scaled(finite(options.outlineEscalationPartialMaxBlend, 0.36), policy.scale, 0),
     partialMaxLumaDelta: finite(options.outlineEscalationPartialMaxLumaDelta, 8),
-    partialHardSceneGuard: finite(options.outlineEscalationPartialHardSceneGuard, 0.44),
+    partialHardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.outlineEscalationPartialHardSceneGuard, 0.44), 0.36)
+      : finite(options.outlineEscalationPartialHardSceneGuard, 0.44),
     partialMinImprovement: finite(options.outlineEscalationPartialMinImprovement, 0.012),
     partialMaxOutlineRatio: finite(options.outlineEscalationPartialMaxOutlineRatio, 0.988),
-    contourBodyOverride: options.outlineEscalationContourBodyOverride !== false,
+    contourBodyOverride: policy.mode !== 'medium' && options.outlineEscalationContourBodyOverride !== false,
     bodyOverrideMinOutlineScore: finite(options.outlineEscalationBodyOverrideMinScore, 1.25),
     bodyOverrideMinOutlineDensity: finite(options.outlineEscalationBodyOverrideMinDensity, 0.075),
     bodyOverrideMinOutlineSamples: Math.max(8, Math.round(finite(options.outlineEscalationBodyOverrideMinSamples, 12))),
     bodyOverrideMinSectorSupport: Math.max(3, Math.round(finite(options.outlineEscalationBodyOverrideMinSectorSupport, 3))),
     bodyOverrideMaxBodyScore: finite(options.outlineEscalationBodyOverrideMaxBodyScore, 12.0),
     bodyOverrideMinDominance: finite(options.outlineEscalationBodyOverrideMinDominance, 0.20),
-    bodyOverrideStrength: finite(options.outlineEscalationBodyOverrideStrength, 0.44),
-    bodyOverrideMaxBlend: finite(options.outlineEscalationBodyOverrideMaxBlend, 0.34),
+    bodyOverrideStrength: scaled(finite(options.outlineEscalationBodyOverrideStrength, 0.44), policy.scale, 0),
+    bodyOverrideMaxBlend: scaled(finite(options.outlineEscalationBodyOverrideMaxBlend, 0.34), policy.scale, 0),
     bodyOverrideMaxLumaDelta: finite(options.outlineEscalationBodyOverrideMaxLumaDelta, 7),
     bodyOverrideHardSceneGuard: finite(options.outlineEscalationBodyOverrideHardSceneGuard, 0.50),
     bodyOverrideMinImprovement: finite(options.outlineEscalationBodyOverrideMinImprovement, 0.015),
@@ -123,8 +159,9 @@ function outlineEscalationOptions(options = {}) {
 }
 
 function microInterpolationOptions(options = {}) {
+  const policy = confidencePolicy(options);
   return {
-    enabled: options.contourMicroInterpolationEnabled !== false,
+    enabled: options.contourMicroInterpolationEnabled !== false && policy.aggressiveEnabled,
     minScore: finite(options.contourMicroInterpolationMinScore, 1.10),
     minDensity: finite(options.contourMicroInterpolationMinDensity, 0.055),
     minSamples: Math.max(8, Math.round(finite(options.contourMicroInterpolationMinSamples, 10))),
@@ -133,9 +170,11 @@ function microInterpolationOptions(options = {}) {
     maxAlpha: finite(options.contourMicroInterpolationMaxAlpha, 0.28),
     cleanAlpha: finite(options.contourMicroInterpolationCleanAlpha, 0.014),
     maxRadius: Math.max(4, Math.round(finite(options.contourMicroInterpolationMaxRadius, 12))),
-    hardSceneGuard: finite(options.contourMicroInterpolationHardSceneGuard, 0.40),
-    strength: finite(options.contourMicroInterpolationStrength, 0.42),
-    maxBlend: finite(options.contourMicroInterpolationMaxBlend, 0.30),
+    hardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.contourMicroInterpolationHardSceneGuard, 0.40), 0.32)
+      : finite(options.contourMicroInterpolationHardSceneGuard, 0.40),
+    strength: scaled(finite(options.contourMicroInterpolationStrength, 0.42), policy.scale, 0),
+    maxBlend: scaled(finite(options.contourMicroInterpolationMaxBlend, 0.30), policy.scale, 0),
     maxLumaDelta: finite(options.contourMicroInterpolationMaxLumaDelta, 7),
     minCorrectedPixels: Math.max(4, Math.round(finite(options.contourMicroInterpolationMinCorrectedPixels, 6))),
     minImprovement: finite(options.contourMicroInterpolationMinImprovement, 0.006),
@@ -147,8 +186,9 @@ function microInterpolationOptions(options = {}) {
 }
 
 function internalResidualOptions(options = {}) {
+  const policy = confidencePolicy(options);
   return {
-    enabled: options.internalResidualRescueEnabled !== false,
+    enabled: options.internalResidualRescueEnabled !== false && policy.aggressiveEnabled,
     minAlpha: finite(options.internalResidualMinAlpha, 0.12),
     maxAlpha: finite(options.internalResidualMaxAlpha, 0.78),
     minScore: finite(options.internalResidualMinScore, 1.30),
@@ -158,28 +198,35 @@ function internalResidualOptions(options = {}) {
     minSignConsistency: finite(options.internalResidualMinSignConsistency, 0.56),
     minHighlightPixels: Math.max(1, Math.round(finite(options.internalResidualMinHighlightPixels, 2))),
     minHighlightResidual: finite(options.internalResidualMinHighlightResidual, 9.0),
-    strength: finite(options.internalResidualStrength, 0.34),
-    maxBlend: finite(options.internalResidualMaxBlend, 0.30),
+    strength: scaled(finite(options.internalResidualStrength, 0.34), policy.scale, 0),
+    maxBlend: scaled(finite(options.internalResidualMaxBlend, 0.30), policy.scale, 0),
     maxLumaDelta: finite(options.internalResidualMaxLumaDelta, 12),
-    hardSceneGuard: finite(options.internalResidualHardSceneGuard, 0.54),
-    highlightHardSceneGuard: finite(options.internalResidualHighlightHardSceneGuard, 0.86),
+    hardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.internalResidualHardSceneGuard, 0.54), 0.44)
+      : finite(options.internalResidualHardSceneGuard, 0.54),
+    highlightHardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.internalResidualHighlightHardSceneGuard, 0.86), 0.68)
+      : finite(options.internalResidualHighlightHardSceneGuard, 0.86),
     sceneEdgeOptions: options.sceneEdgeOptions || {},
     ...(options.internalResidualRescueOptions || {})
   };
 }
 
 function postInternalContourOptions(options = {}) {
+  const policy = confidencePolicy(options);
   return {
-    enabled: options.postInternalContourEnabled !== false,
+    enabled: options.postInternalContourEnabled !== false && policy.aggressiveEnabled,
     minAlpha: finite(options.postInternalContourMinAlpha, 0.010),
     maxAlpha: finite(options.postInternalContourMaxAlpha, 0.42),
     cleanAlpha: finite(options.postInternalContourCleanAlpha, 0.010),
     maxRadius: Math.max(7, Math.round(finite(options.postInternalContourMaxRadius, 18))),
-    hardSceneGuard: finite(options.postInternalContourHardSceneGuard, 0.40),
-    smoothStrength: finite(options.postInternalContourSmoothStrength, 0.58),
-    structuredStrength: finite(options.postInternalContourStructuredStrength, 0.34),
-    smoothMaxBlend: finite(options.postInternalContourSmoothMaxBlend, 0.42),
-    structuredMaxBlend: finite(options.postInternalContourStructuredMaxBlend, 0.27),
+    hardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.postInternalContourHardSceneGuard, 0.40), 0.32)
+      : finite(options.postInternalContourHardSceneGuard, 0.40),
+    smoothStrength: scaled(finite(options.postInternalContourSmoothStrength, 0.58), policy.scale, 0),
+    structuredStrength: scaled(finite(options.postInternalContourStructuredStrength, 0.34), policy.scale, 0),
+    smoothMaxBlend: scaled(finite(options.postInternalContourSmoothMaxBlend, 0.42), policy.scale, 0),
+    structuredMaxBlend: scaled(finite(options.postInternalContourStructuredMaxBlend, 0.27), policy.scale, 0),
     smoothMaxLumaDelta: finite(options.postInternalContourSmoothMaxLumaDelta, 11),
     structuredMaxLumaDelta: finite(options.postInternalContourStructuredMaxLumaDelta, 8),
     residualSoft: finite(options.postInternalContourResidualSoft, 0.38),
@@ -199,8 +246,9 @@ function postInternalContourOptions(options = {}) {
 }
 
 function structureContinuationOptions(options = {}) {
+  const policy = confidencePolicy(options);
   return {
-    enabled: options.residualStructureContinuationEnabled !== false,
+    enabled: options.residualStructureContinuationEnabled !== false && policy.aggressiveEnabled,
     minAlpha: finite(options.residualStructureMinAlpha, 0.006),
     maxAlpha: finite(options.residualStructureMaxAlpha, 0.30),
     cleanAlpha: finite(options.residualStructureCleanAlpha, 0.010),
@@ -210,10 +258,14 @@ function structureContinuationOptions(options = {}) {
     minOutlineSamples: Math.max(4, Math.round(finite(options.residualStructureMinOutlineSamples, 6))),
     minPairAgreement: finite(options.residualStructureMinPairAgreement, 0.62),
     strongPairAgreement: finite(options.residualStructureStrongPairAgreement, 0.84),
-    hardSceneGuard: finite(options.residualStructureHardSceneGuard, 0.76),
-    lineSceneGuard: finite(options.residualStructureLineSceneGuard, 0.94),
-    strength: finite(options.residualStructureStrength, 0.34),
-    maxBlend: finite(options.residualStructureMaxBlend, 0.20),
+    hardSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.residualStructureHardSceneGuard, 0.76), 0.58)
+      : finite(options.residualStructureHardSceneGuard, 0.76),
+    lineSceneGuard: policy.mode === 'medium'
+      ? Math.min(finite(options.residualStructureLineSceneGuard, 0.94), 0.78)
+      : finite(options.residualStructureLineSceneGuard, 0.94),
+    strength: scaled(finite(options.residualStructureStrength, 0.34), policy.scale, 0),
+    maxBlend: scaled(finite(options.residualStructureMaxBlend, 0.20), policy.scale, 0),
     maxLumaDelta: finite(options.residualStructureMaxLumaDelta, 6),
     residualSoft: finite(options.residualStructureResidualSoft, 0.38),
     residualHard: finite(options.residualStructureResidualHard, 3.2),
@@ -223,6 +275,33 @@ function structureContinuationOptions(options = {}) {
     maxOutlineRatio: finite(options.residualStructureMaxOutlineRatio, 1.002),
     sceneEdgeOptions: options.sceneEdgeOptions || {},
     ...(options.residualStructureContinuationOptions || {})
+  };
+}
+
+function persistentContourOptions(options = {}) {
+  return {
+    enabled: options.persistentContourSilhouetteEnabled !== false,
+    detectionConfidence: options.detectionConfidence,
+    minScore: finite(options.persistentContourMinScore, 0.88),
+    minDensity: finite(options.persistentContourMinDensity, 0.040),
+    minSamples: Math.max(6, Math.round(finite(options.persistentContourMinSamples, 8))),
+    minSectors: Math.max(2, Math.round(finite(options.persistentContourMinSectors, 2))),
+    minAlpha: finite(options.persistentContourMinAlpha, 0.006),
+    maxAlpha: finite(options.persistentContourMaxAlpha, 0.34),
+    cleanAlpha: finite(options.persistentContourCleanAlpha, 0.010),
+    maxRadius: Math.max(4, Math.round(finite(options.persistentContourMaxRadius, 10))),
+    strength: finite(options.persistentContourStrength, 0.48),
+    maxBlend: finite(options.persistentContourMaxBlend, 0.24),
+    maxLumaDelta: finite(options.persistentContourMaxLumaDelta, 7),
+    hardSceneGuard: finite(options.persistentContourHardSceneGuard, 0.42),
+    minCorrectedPixels: Math.max(3, Math.round(finite(options.persistentContourMinCorrectedPixels, 4))),
+    minOutlineImprovement: finite(options.persistentContourMinOutlineImprovement, 0.012),
+    maxOutlineRatio: finite(options.persistentContourMaxOutlineRatio, 0.990),
+    minLocalImprovement: finite(options.persistentContourMinLocalImprovement, 0.08),
+    maxMeanBlend: finite(options.persistentContourMaxMeanBlend, 0.23),
+    maxPasses: Math.max(1, Math.min(2, Math.round(finite(options.persistentContourMaxPasses, 2)))),
+    sceneEdgeOptions: options.sceneEdgeOptions || {},
+    ...(options.persistentContourSilhouetteOptions || {})
   };
 }
 
@@ -257,6 +336,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
   let candidateSmoothBackground = null;
   let artifactGuard = null;
   const maxChromaIncrease = finite(options.maxChromaIncrease, 0.75);
+  const policy = gate.detectionConfidencePolicy || confidencePolicy(options);
 
   if (gate.eligible) {
     structuredAttempted = true;
@@ -270,12 +350,12 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
         reason: `structured-smooth-rescue:${smoothAnalysis?.reason || 'near-smooth'}`
       },
       {
-        strength: finite(options.strength, 0.86),
+        strength: scaled(finite(options.strength, 0.86), policy.scale, 0),
         dilationRadius: finite(options.dilationRadius, 3),
-        microSmooth: finite(options.microSmooth, 0.10),
-        preservationFallbackStrength: finite(options.fallbackStrength, 0.38),
+        microSmooth: scaled(finite(options.microSmooth, 0.10), policy.scale, 0),
+        preservationFallbackStrength: scaled(finite(options.fallbackStrength, 0.38), policy.scale, 0),
         preservationFallbackDilation: finite(options.fallbackDilation, 2),
-        preservationFallbackMicroSmooth: finite(options.fallbackMicroSmooth, 0.06),
+        preservationFallbackMicroSmooth: scaled(finite(options.fallbackMicroSmooth, 0.06), policy.scale, 0),
         detailPreservationOptions: options.detailPreservationOptions || {}
       }
     );
@@ -372,13 +452,33 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     };
   }
 
+  // Always give a strong remaining watermark-shaped contour one final local-only
+  // opportunity. This is intentionally after every broad/structured pass so an
+  // accepted low-gain reconstruction cannot terminate the chain while the
+  // diamond silhouette is still visible.
+  const persistentCandidate = applyPersistentContourSilhouetteDissolve(
+    selected,
+    alphaMap,
+    persistentContourOptions(options)
+  );
+  const persistentContourSilhouetteDissolve = persistentCandidate.persistentContourSilhouetteDissolve || null;
+  const persistentContourAccepted = Boolean(persistentContourSilhouetteDissolve?.accepted);
+  if (persistentContourAccepted) {
+    selected = {
+      width: persistentCandidate.width,
+      height: persistentCandidate.height,
+      data: new Uint8ClampedArray(persistentCandidate.data)
+    };
+  }
+
   const accepted = structuredAccepted
     || finalAccepted
     || outlineEscalationAccepted
     || contourMicroInterpolationAccepted
     || internalResidualAccepted
     || postInternalContourAccepted
-    || residualStructureContinuationAccepted;
+    || residualStructureContinuationAccepted
+    || persistentContourAccepted;
   let acceptedMode = 'none';
   if (outlineEscalationAccepted) {
     if (structuredAccepted && finalAccepted) acceptedMode = 'structured-smooth+final-visual+outline-escalation';
@@ -411,6 +511,11 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       ? profile
       : `${acceptedMode}+${profile}`;
   }
+  if (persistentContourAccepted) {
+    acceptedMode = acceptedMode === 'none'
+      ? 'persistent-contour-silhouette'
+      : `${acceptedMode}+persistent-contour-silhouette`;
+  }
 
   const finalGlobal = measurePostCleanupResidual(selected, alphaMap);
   const finalAligned = measureStructuredRingResidual(selected, alphaMap);
@@ -429,7 +534,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
         || Boolean(contourMicroInterpolation?.attempted)
         || Boolean(internalResidualRescue?.attempted)
         || Boolean(postInternalContour?.attempted)
-        || Boolean(residualStructureContinuation?.attempted),
+        || Boolean(residualStructureContinuation?.attempted)
+        || Boolean(persistentContourSilhouetteDissolve?.attempted),
       accepted,
       acceptedMode,
       structuredAttempted,
@@ -441,6 +547,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       internalResidualAccepted,
       postInternalContourAccepted,
       residualStructureContinuationAccepted,
+      persistentContourAccepted,
       ...gate,
       beforeGlobal,
       afterGlobal: finalGlobal,
@@ -462,6 +569,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       postInternalContour,
       postInternalContourDissolve: postInternalContour,
       residualStructureContinuation,
+      persistentContourSilhouetteDissolve,
       postChainOutlineResidual,
       postChainOutlineSceneSafe
     }

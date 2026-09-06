@@ -59,7 +59,10 @@ function activateExportCalibration(options, calibration) {
   });
   return {
     ...options,
-    alphaGain: selectExportAlphaGain(options?.alphaGain, calibration.alphaGain, 1)
+    alphaGain: selectExportAlphaGain(options?.alphaGain, calibration.alphaGain, 1),
+    detectionConfidence: Number.isFinite(calibration.confidence)
+      ? calibration.confidence
+      : options?.detectionConfidence
   };
 }
 
@@ -120,6 +123,7 @@ self.onmessage = async (event) => {
           reused: true,
           candidateId: calibration.candidateId || null,
           alphaGain: processOptions.alphaGain,
+          confidence: Number.isFinite(calibration.confidence) ? calibration.confidence : null,
           position: calibration.position
         } : { reused: false }
       };
