@@ -19,6 +19,7 @@ export function batchBackgroundLabel(preview = null) {
   const outline = rescue?.outlineResidualEscalation || null;
   const partial = outline?.partialSceneProtected === true;
   const contourOverride = outline?.contourBodyOverride === true;
+  if (rescueMode?.includes('persistent-contour-silhouette')) return 'Persistent contour silhouette dissolve';
   if (rescueMode?.includes('internal-residual') && rescueMode?.includes('contour-micro-interpolation')) return 'Contour + internal ghost/highlight rescue';
   if (rescueMode?.includes('internal-residual')) return 'Internal ghost/highlight rescue';
   if (rescueMode?.includes('contour-micro-interpolation')) return 'Contour micro-interpolation finishing';
@@ -102,6 +103,18 @@ function microInterpolationRiskFlags(preview = null) {
       flags.push('micro-reject-outline-ratio');
     }
   }
+  return flags;
+}
+
+function persistentContourRiskFlags(preview = null) {
+  const contour = preview?.structuredSmoothRescue?.persistentContourSilhouetteDissolve || null;
+  if (!contour) return [];
+  const flags = [];
+  if (contour.accepted) flags.push('persistent-contour-dissolve-accepted');
+  else if (contour.attempted) flags.push('persistent-contour-dissolve-rejected');
+  if (contour.reason === 'low-detection-confidence') flags.push('persistent-contour-low-confidence-blocked');
+  if (contour.confidencePolicy?.mode === 'medium') flags.push('medium-confidence-conservative-rescue');
+  if (contour.remainingStrong === true) flags.push('persistent-contour-watermark-residual');
   return flags;
 }
 
@@ -215,6 +228,7 @@ export function buildBatchDetectionView(detection = null, preview = null) {
     ...finalVisualRiskFlags(preview),
     ...outlineResidualRiskFlags(preview),
     ...microInterpolationRiskFlags(preview),
+    ...persistentContourRiskFlags(preview),
     ...internalResidualRiskFlags(preview)
   ])];
 
