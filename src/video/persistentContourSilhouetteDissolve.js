@@ -100,11 +100,16 @@ function directContourDescriptor(alphaMap, width, height, x, y, options = {}) {
   };
 }
 
+function effectiveOuterBandRadius(policy, options = {}) {
+  let radius = Math.max(0, Math.min(4, Math.round(Number(options.outerBandRadius ?? 3))));
+  if (policy.mode === 'medium') radius = Math.min(radius, 1);
+  return radius;
+}
+
 function exteriorContourDescriptor(alphaMap, width, height, x, y, policy, options = {}) {
   const minAlpha = Number.isFinite(options.minAlpha) ? options.minAlpha : 0.006;
   if ((alphaMap[y * width + x] || 0) >= minAlpha) return null;
-  let radius = Math.max(0, Math.min(4, Math.round(Number(options.outerBandRadius ?? 3))));
-  if (policy.mode === 'medium') radius = Math.min(radius, 1);
+  const radius = effectiveOuterBandRadius(policy, options);
   if (radius < 1) return null;
 
   const minAlignment = clamp(Number(options.outerBandMinAlignment ?? 0.50), 0.20, 0.95);
@@ -135,6 +140,7 @@ function exteriorContourDescriptor(alphaMap, width, height, x, y, policy, option
           gradient: seed.gradient,
           exterior: true,
           distance,
+          bandRadius: radius,
           seedX: sx,
           seedY: sy,
           alignment
@@ -202,8 +208,17 @@ function outwardPrediction(image, alphaMap, x, y, options = {}, descriptor = nul
     gradientMagnitude = gradient.magnitude;
   }
   const offsets = options.tangentOffsets || [-3, -1, 0, 1, 3];
+  const anchorOptions = descriptor?.exterior
+    ? {
+        ...options,
+        anchorStart: Math.max(
+          Math.round(Number(options.anchorStart ?? 2)),
+          Math.ceil(Number(descriptor.bandRadius ?? descriptor.distance ?? 0)) + 2
+        )
+      }
+    : options;
   const anchors = offsets
-    .map((offset) => cleanOutwardAnchor(image, alphaMap, x, y, nx, ny, offset, options))
+    .map((offset) => cleanOutwardAnchor(image, alphaMap, x, y, nx, ny, offset, anchorOptions))
     .filter(Boolean);
   const minAnchors = Math.max(2, Math.round(Number(options.minAnchors ?? 3)));
   if (anchors.length < minAnchors) return null;
@@ -254,6 +269,7 @@ function buildCandidate(image, alphaMap, policy, options = {}) {
   let exteriorGuardedPixels = 0;
   let missingAnchors = 0;
   let donorRejectedPixels = 0;
+  let maxExteriorDistance = 0;
   let blendSum = 0;
   let localBeforeSum = 0;
   let localAfterSum = 0;
@@ -265,7 +281,10 @@ function buildCandidate(image, alphaMap, policy, options = {}) {
       const descriptor = contourDescriptor(alphaMap, image.width, image.height, x, y, policy, options);
       if (!descriptor || descriptor.weight < 0.035) continue;
       contourCandidates++;
-      if (descriptor.exterior) exteriorCandidates++;
+      if (descriptor.exterior) {
+        exteriorCandidates++;
+        maxExteriorDistance = Math.max(maxExteriorDistance, descriptor.distance);
+      }
 
       const scene = sceneEdgeProtectionAt(
         image,
@@ -350,6 +369,7 @@ function buildCandidate(image, alphaMap, policy, options = {}) {
     guardedFraction: contourCandidates ? guardedPixels / contourCandidates : 0,
     missingAnchors,
     donorRejectedPixels,
+    maxExteriorDistance,
     meanBlend: correctedPixels ? blendSum / correctedPixels : 0,
     localBeforeResidual,
     localAfterResidual,
@@ -447,6 +467,8 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
         afterGlobal: beforeGlobal,
         correctedPixels: 0,
         exteriorCorrectedPixels: 0,
+        maxExteriorDistance: 0,
+        candidateMaxExteriorDistance: 0,
         passesAttempted: 0,
         passesAccepted: 0,
         remainingStrong: outlineStrong
@@ -533,6 +555,8 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       candidateExteriorCorrectedPixels: effectiveCandidate?.exteriorCorrectedPixels || 0,
       contourCandidates: effectiveCandidate?.contourCandidates || 0,
       exteriorCandidates: effectiveCandidate?.exteriorCandidates || 0,
+      maxExteriorDistance: accepted ? (effectiveCandidate?.maxExteriorDistance || 0) : 0,
+      candidateMaxExteriorDistance: effectiveCandidate?.maxExteriorDistance || 0,
       guardedPixels: effectiveCandidate?.guardedPixels || 0,
       exteriorGuardedPixels: effectiveCandidate?.exteriorGuardedPixels || 0,
       guardedFraction: effectiveCandidate?.guardedFraction || 0,
