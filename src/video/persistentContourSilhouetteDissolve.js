@@ -401,6 +401,9 @@ function assessCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, optio
   const globalSafe = afterGlobal.total <= beforeGlobal.total * 1.012 + 0.05
     && afterGlobal.luma <= beforeGlobal.luma * 1.015 + 0.05
     && afterGlobal.chroma <= beforeGlobal.chroma * 1.010 + 0.35;
+  const exteriorGlobalSafe = afterGlobal.total <= beforeGlobal.total * 1.040 + 0.12
+    && afterGlobal.luma <= beforeGlobal.luma * 1.045 + 0.15
+    && afterGlobal.chroma <= beforeGlobal.chroma * 1.030 + 0.50;
   const localContourAccepted = candidate.correctedPixels >= minCorrectedPixels
     && candidate.meanBlend <= maxMeanBlend
     && candidate.localImprovement >= minLocalImprovement
@@ -412,13 +415,14 @@ function assessCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, optio
     && candidate.meanBlend <= maxMeanBlend
     && candidate.exteriorLocalImprovement >= minExteriorLocalImprovement
     && exteriorOutlineSafe
-    && globalSafe;
+    && exteriorGlobalSafe;
   return {
     accepted: localContourAccepted || exteriorContourAccepted,
     localContourAccepted,
     exteriorContourAccepted,
     exteriorOutlineSafe,
     globalSafe,
+    exteriorGlobalSafe,
     afterOutline,
     afterGlobal,
     outlineImprovement,
@@ -465,6 +469,8 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
         afterOutline: beforeOutline,
         beforeGlobal,
         afterGlobal: beforeGlobal,
+        globalSafe: true,
+        exteriorGlobalSafe: true,
         correctedPixels: 0,
         exteriorCorrectedPixels: 0,
         maxExteriorDistance: 0,
@@ -523,9 +529,9 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
     && afterOutline.samples >= minSamples
     && afterOutline.sectorSupport >= minSectors;
   const acceptanceMode = accepted
-    ? (effectiveAssessment?.exteriorContourAccepted && !effectiveAssessment?.localContourAccepted
-      ? 'exterior-contour-metric'
-      : (effectiveAssessment?.exteriorContourAccepted ? 'local+exterior-contour-metric' : 'local-contour-metric'))
+    ? (effectiveAssessment?.localContourAccepted
+      ? 'local-contour-metric'
+      : (effectiveAssessment?.exteriorContourAccepted ? 'exterior-contour-metric' : 'accepted'))
     : 'rejected';
   return {
     width: image.width,
@@ -549,6 +555,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       afterGlobal,
       candidateAfterGlobal: effectiveAssessment?.afterGlobal || beforeGlobal,
       globalSafe: effectiveAssessment?.globalSafe ?? true,
+      exteriorGlobalSafe: effectiveAssessment?.exteriorGlobalSafe ?? true,
       correctedPixels: accepted ? totalCorrectedPixels : 0,
       exteriorCorrectedPixels: accepted ? totalExteriorCorrectedPixels : 0,
       candidateCorrectedPixels: effectiveCandidate?.correctedPixels || 0,
