@@ -143,8 +143,10 @@ test('v1.0.125 limits exterior expansion at medium confidence and still blocks l
     detectionConfidence: 0.26,
     outerBandRadius: 3
   });
-  assert.equal(medium.persistentContourSilhouetteDissolve.confidencePolicy.mode, 'medium');
-  assert.ok(medium.persistentContourSilhouetteDissolve.candidateExteriorCorrectedPixels <= 2);
+  const mediumDiag = medium.persistentContourSilhouetteDissolve;
+  assert.equal(mediumDiag.confidencePolicy.mode, 'medium');
+  assert.ok(mediumDiag.exteriorCandidates > 0);
+  assert.ok(mediumDiag.candidateMaxExteriorDistance <= 1.05);
   assert.equal(low.persistentContourSilhouetteDissolve.attempted, false);
   assert.equal(low.persistentContourSilhouetteDissolve.reason, 'low-detection-confidence');
   assert.deepEqual(low.data, image.data);
