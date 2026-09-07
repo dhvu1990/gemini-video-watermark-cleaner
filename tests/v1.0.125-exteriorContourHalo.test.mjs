@@ -8,6 +8,39 @@ function lumaAt(image, x, y) {
   return 0.2126 * image.data[p] + 0.7152 * image.data[p + 1] + 0.0722 * image.data[p + 2];
 }
 
+function diagnosticSummary(diag) {
+  return JSON.stringify({
+    accepted: diag.accepted,
+    acceptanceMode: diag.acceptanceMode,
+    candidateCorrectedPixels: diag.candidateCorrectedPixels,
+    candidateExteriorCorrectedPixels: diag.candidateExteriorCorrectedPixels,
+    exteriorCandidates: diag.exteriorCandidates,
+    exteriorGuardedPixels: diag.exteriorGuardedPixels,
+    missingAnchors: diag.missingAnchors,
+    donorRejectedPixels: diag.donorRejectedPixels,
+    candidateMeanBlend: diag.candidateMeanBlend,
+    localImprovement: diag.localImprovement,
+    exteriorLocalImprovement: diag.exteriorLocalImprovement,
+    candidateOutlineImprovement: diag.candidateOutlineImprovement,
+    globalSafe: diag.globalSafe,
+    exteriorGlobalSafe: diag.exteriorGlobalSafe,
+    beforeGlobal: diag.beforeGlobal,
+    candidateAfterGlobal: diag.candidateAfterGlobal,
+    beforeOutline: {
+      score: diag.beforeOutline?.score,
+      candidateDensity: diag.beforeOutline?.candidateDensity,
+      samples: diag.beforeOutline?.samples,
+      sectorSupport: diag.beforeOutline?.sectorSupport
+    },
+    candidateAfterOutline: {
+      score: diag.candidateAfterOutline?.score,
+      candidateDensity: diag.candidateAfterOutline?.candidateDensity,
+      samples: diag.candidateAfterOutline?.samples,
+      sectorSupport: diag.candidateAfterOutline?.sectorSupport
+    }
+  });
+}
+
 function syntheticExteriorHaloScene({ width = 80, height = 80, line = false } = {}) {
   const data = new Uint8ClampedArray(width * height * 4);
   const alpha = new Float32Array(width * height);
@@ -89,12 +122,13 @@ test('v1.0.125 removes a watermark-shaped halo that sits outside direct alpha su
     outerBandScale: 0.92
   });
   const diag = result.persistentContourSilhouetteDissolve;
-  assert.equal(diag.attempted, true);
-  assert.equal(diag.accepted, true);
-  assert.ok(diag.exteriorCandidates > 0);
-  assert.ok(diag.exteriorCorrectedPixels > 0);
-  assert.ok(diag.exteriorLocalImprovement > 0);
-  assert.ok(ringError(result, ringMask) < beforeError);
+  const summary = diagnosticSummary(diag);
+  assert.equal(diag.attempted, true, summary);
+  assert.equal(diag.accepted, true, summary);
+  assert.ok(diag.exteriorCandidates > 0, summary);
+  assert.ok(diag.exteriorCorrectedPixels > 0, summary);
+  assert.ok(diag.exteriorLocalImprovement > 0, summary);
+  assert.ok(ringError(result, ringMask) < beforeError, summary);
 });
 
 test('v1.0.125 keeps a real crossing scene line guarded while correcting the exterior halo', () => {
@@ -108,8 +142,10 @@ test('v1.0.125 keeps a real crossing scene line guarded while correcting the ext
     hardSceneGuard: 0.48
   });
   const diag = result.persistentContourSilhouetteDissolve;
-  assert.ok(diag.exteriorCandidates > 0);
-  assert.ok(diag.exteriorGuardedPixels > 0);
+  const summary = diagnosticSummary(diag);
+  assert.equal(diag.accepted, true, summary);
+  assert.ok(diag.exteriorCandidates > 0, summary);
+  assert.ok(diag.exteriorGuardedPixels > 0, summary);
   let lineDelta = 0;
   let lineCount = 0;
   let ringDelta = 0;
@@ -125,9 +161,9 @@ test('v1.0.125 keeps a real crossing scene line guarded while correcting the ext
       ringCount++;
     }
   }
-  assert.ok(ringCount > 0 && ringDelta > 0);
-  assert.ok(lineCount > 0);
-  assert.ok(lineDelta / lineCount < ringDelta / ringCount);
+  assert.ok(ringCount > 0 && ringDelta > 0, summary);
+  assert.ok(lineCount > 0, summary);
+  assert.ok(lineDelta / lineCount < ringDelta / ringCount, summary);
 });
 
 test('v1.0.125 limits exterior expansion at medium confidence and still blocks low confidence', () => {
