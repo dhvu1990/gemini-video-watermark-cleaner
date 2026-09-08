@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-const rescueSource = readFileSync(new URL('../src/video/structuredSmoothRescue.js', import.meta.url), 'utf8');
+const rescueSource = readFileSync(new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url), 'utf8');
 const previewSource = readFileSync(new URL('../src/batchPreviewModel.js', import.meta.url), 'utf8');
 
 test('guarded contour rescue opens more safe contour area while lowering local correction caps', () => {
