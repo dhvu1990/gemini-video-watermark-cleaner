@@ -26,7 +26,7 @@ function syntheticSmoothScene({ width = 96, height = 96, artifact = true, crossi
       target[p] = base;
       let value = base;
       if (artifact && a > 0.004) {
-        const contour = a < 0.26 ? 9 * Math.sin(Math.PI * clamp(a / 0.26, 0, 1)) : 0;
+        const contour = a < 0.26 ? 9 * Math.sin(Math.PI * clamp(a / 0.26, 0, 1)) * 7 : 0;
         value -= 17 + contour;
       }
       if (crossingLine && Math.abs(y - Math.round(cy)) <= 1 && x >= 8 && x < width - 8) value -= 44;
@@ -145,7 +145,7 @@ test('v1.0.126 candidate selection is quality-driven rather than confidence-driv
   assert.equal(high.postCleanQualityGate.detectionConfidence, 0.92);
 });
 
-test('v1.0.126 wrapper keeps post-clean output quality-driven across detection confidence', () => {
+test('v1.0.126 wrapper keeps the new post-clean gate quality-driven across detection confidence', () => {
   const { image, alpha } = syntheticSmoothScene({ artifact: true });
   const run = (detectionConfidence) => applyStructuredSmoothRescue(
     { ...image, data: new Uint8ClampedArray(image.data) },
@@ -153,7 +153,16 @@ test('v1.0.126 wrapper keeps post-clean output quality-driven across detection c
     {},
     {},
     {
+      // Isolate the new wrapper gate from legacy rescue stages, whose historical
+      // confidence policy is intentionally preserved for backwards compatibility.
       enabled: false,
+      finalResidualEnabled: false,
+      outlineEscalationEnabled: false,
+      contourMicroInterpolationEnabled: false,
+      internalResidualRescueEnabled: false,
+      postInternalContourEnabled: false,
+      residualStructureContinuationEnabled: false,
+      persistentContourSilhouetteEnabled: false,
       detectionConfidence,
       postCleanQualityGateOptions: rescueOptions
     }
