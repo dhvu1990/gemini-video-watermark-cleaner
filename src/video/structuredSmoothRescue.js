@@ -1,10 +1,8 @@
 import {
   applyStructuredSmoothRescue as applyStructuredSmoothRescueCore,
-  evaluateStructuredSmoothRescueEligibility
+  evaluateStructuredSmoothRescueEligibility as evaluateStructuredSmoothRescueEligibilityCore
 } from './structuredSmoothRescueCore.js';
 import { applyPostCleanQualityGate } from './postCleanQualityGate.js';
-
-export { evaluateStructuredSmoothRescueEligibility };
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -15,6 +13,32 @@ function finite(value, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
+function diagnosticConfidence(options = {}) {
+  const raw = Number(options.detectionConfidence);
+  return Number.isFinite(raw) ? clamp(raw, 0, 1) : null;
+}
+
+function qualityDrivenCoreOptions(options = {}) {
+  const next = { ...options };
+  delete next.detectionConfidence;
+  return next;
+}
+
+export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoothAnalysis = {}, structuredRing = {}, options = {}) {
+  const result = evaluateStructuredSmoothRescueEligibilityCore(
+    image,
+    alphaMap,
+    smoothAnalysis,
+    structuredRing,
+    qualityDrivenCoreOptions(options)
+  );
+  return {
+    ...result,
+    inputDetectionConfidence: diagnosticConfidence(options),
+    confidenceDecisionPolicy: 'quality-driven'
+  };
+}
+
 function effectiveQualityScore(diag) {
   if (!diag) return Infinity;
   if (diag.accepted && Number.isFinite(diag.candidate?.score)) return diag.candidate.score;
@@ -23,32 +47,19 @@ function effectiveQualityScore(diag) {
 }
 
 function qualityGateOptions(options = {}) {
-  const rawConfidence = Number(options.detectionConfidence);
-  const confidence = Number.isFinite(rawConfidence) ? clamp(rawConfidence, 0, 1) : null;
-  const lowConfidence = confidence !== null && confidence < 0.40;
-  const mediumConfidence = confidence !== null && confidence >= 0.40 && confidence < 0.65;
-
-  const defaults = mediumConfidence
-    ? {
-        strength: 0.56,
-        exteriorStrength: 0.28,
-        regrainStrength: 0.20,
-        maxChannelDelta: 24,
-        minQualityImprovement: 0.10,
-        maxSceneEdgeScore: 0.24
-      }
-    : {
-        strength: 0.78,
-        exteriorStrength: 0.46,
-        regrainStrength: 0.30,
-        maxChannelDelta: 36,
-        minQualityImprovement: 0.08,
-        maxSceneEdgeScore: 0.30
-      };
+  const confidence = diagnosticConfidence(options);
+  const custom = options.postCleanQualityGateOptions || {};
+  const defaults = {
+    strength: 0.78,
+    exteriorStrength: 0.46,
+    regrainStrength: 0.30,
+    maxChannelDelta: 36,
+    minQualityImprovement: 0.08,
+    maxSceneEdgeScore: 0.30
+  };
 
   return {
-    enabled: options.postCleanQualityGateEnabled !== false && !lowConfidence,
-    detectionConfidence: confidence,
+    enabled: options.postCleanQualityGateEnabled !== false,
     supportAlpha: finite(options.postCleanQualityGateSupportAlpha, 0.006),
     donorInnerRadius: finite(options.postCleanQualityGateDonorInnerRadius, 4),
     donorOuterRadius: finite(options.postCleanQualityGateDonorOuterRadius, 12),
@@ -69,12 +80,20 @@ function qualityGateOptions(options = {}) {
     maxContourResidualRatio: finite(options.postCleanQualityGateMaxContourResidualRatio, 1.04),
     sceneEdgeOptions: options.sceneEdgeOptions || {},
     ...defaults,
-    ...(options.postCleanQualityGateOptions || {})
+    ...custom,
+    enabled: options.postCleanQualityGateEnabled !== false && custom.enabled !== false,
+    detectionConfidence: confidence
   };
 }
 
 export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}, structuredRing = {}, options = {}) {
-  const coreResult = applyStructuredSmoothRescueCore(image, alphaMap, smoothAnalysis, structuredRing, options);
+  const coreResult = applyStructuredSmoothRescueCore(
+    image,
+    alphaMap,
+    smoothAnalysis,
+    structuredRing,
+    qualityDrivenCoreOptions(options)
+  );
   const coreDiagnostics = coreResult.structuredSmoothRescue || {};
   const gateOptions = qualityGateOptions(options);
 
@@ -83,12 +102,12 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       ...coreResult,
       structuredSmoothRescue: {
         ...coreDiagnostics,
+        inputDetectionConfidence: gateOptions.detectionConfidence,
+        confidenceDecisionPolicy: 'quality-driven',
         postCleanQualityGate: {
           attempted: false,
           accepted: false,
-          reason: Number.isFinite(Number(options.detectionConfidence)) && Number(options.detectionConfidence) < 0.40
-            ? 'low-detection-confidence'
-            : 'disabled',
+          reason: 'disabled',
           selectedCandidate: 'core'
         }
       }
@@ -161,6 +180,8 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       attempted: Boolean(coreDiagnostics.attempted || coreGate?.attempted || inputGate?.attempted),
       accepted,
       acceptedMode,
+      inputDetectionConfidence: gateOptions.detectionConfidence,
+      confidenceDecisionPolicy: 'quality-driven',
       postCleanQualityGateAccepted: qualityAccepted,
       postCleanQualityGate: {
         attempted: Boolean(coreGate?.attempted || inputGate?.attempted),
