@@ -122,3 +122,24 @@ test('v1.0.126 refuses smooth reconstruction when a real scene edge crosses the 
   assert.deepEqual(result.data, before);
   assert.ok(diag.sceneEdgeRisk?.protect || diag.reason === 'structured-or-unsafe-annulus', JSON.stringify(diag));
 });
+
+test('v1.0.126 candidate selection is quality-driven rather than confidence-driven', () => {
+  const { image, alpha } = syntheticSmoothScene({ artifact: true });
+  const low = applyPostCleanQualityGate(
+    { ...image, data: new Uint8ClampedArray(image.data) },
+    alpha,
+    { ...rescueOptions, detectionConfidence: 0.42 }
+  );
+  const high = applyPostCleanQualityGate(
+    { ...image, data: new Uint8ClampedArray(image.data) },
+    alpha,
+    { ...rescueOptions, detectionConfidence: 0.92 }
+  );
+
+  assert.equal(low.postCleanQualityGate.accepted, true, JSON.stringify(low.postCleanQualityGate));
+  assert.equal(high.postCleanQualityGate.accepted, true, JSON.stringify(high.postCleanQualityGate));
+  assert.equal(low.postCleanQualityGate.selectedCandidate, high.postCleanQualityGate.selectedCandidate);
+  assert.deepEqual(low.data, high.data);
+  assert.equal(low.postCleanQualityGate.detectionConfidence, 0.42);
+  assert.equal(high.postCleanQualityGate.detectionConfidence, 0.92);
+});
