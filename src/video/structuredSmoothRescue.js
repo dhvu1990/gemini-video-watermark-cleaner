@@ -18,24 +18,18 @@ function diagnosticConfidence(options = {}) {
   return Number.isFinite(raw) ? clamp(raw, 0, 1) : null;
 }
 
-function qualityDrivenCoreOptions(options = {}) {
-  const next = { ...options };
-  delete next.detectionConfidence;
-  return next;
-}
-
 export function evaluateStructuredSmoothRescueEligibility(image, alphaMap, smoothAnalysis = {}, structuredRing = {}, options = {}) {
   const result = evaluateStructuredSmoothRescueEligibilityCore(
     image,
     alphaMap,
     smoothAnalysis,
     structuredRing,
-    qualityDrivenCoreOptions(options)
+    options
   );
   return {
     ...result,
     inputDetectionConfidence: diagnosticConfidence(options),
-    confidenceDecisionPolicy: 'quality-driven'
+    confidenceDecisionPolicy: 'quality-driven-post-gate'
   };
 }
 
@@ -92,7 +86,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
     alphaMap,
     smoothAnalysis,
     structuredRing,
-    qualityDrivenCoreOptions(options)
+    options
   );
   const coreDiagnostics = coreResult.structuredSmoothRescue || {};
   const gateOptions = qualityGateOptions(options);
@@ -103,7 +97,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       structuredSmoothRescue: {
         ...coreDiagnostics,
         inputDetectionConfidence: gateOptions.detectionConfidence,
-        confidenceDecisionPolicy: 'quality-driven',
+        confidenceDecisionPolicy: 'quality-driven-post-gate',
         postCleanQualityGate: {
           attempted: false,
           accepted: false,
@@ -181,7 +175,7 @@ export function applyStructuredSmoothRescue(image, alphaMap, smoothAnalysis = {}
       accepted,
       acceptedMode,
       inputDetectionConfidence: gateOptions.detectionConfidence,
-      confidenceDecisionPolicy: 'quality-driven',
+      confidenceDecisionPolicy: 'quality-driven-post-gate',
       postCleanQualityGateAccepted: qualityAccepted,
       postCleanQualityGate: {
         attempted: Boolean(coreGate?.attempted || inputGate?.attempted),
