@@ -112,8 +112,8 @@ const permissive = {
   maxPasses: 1,
   // Keep this synthetic v1.0.125 exercise inside the production rollback envelope.
   // The test is about exterior reach and scene-line protection, not stress-testing gain.
-  strength: 0.18,
-  maxBlend: 0.18,
+  strength: 0.10,
+  maxBlend: 0.10,
   highConfidenceStrengthBoost: 1,
   highConfidenceBlendBoost: 1
 };
