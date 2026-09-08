@@ -109,7 +109,13 @@ const permissive = {
   minAnchors: 2,
   maxRadius: 16,
   hardSceneGuard: 0.72,
-  maxPasses: 1
+  maxPasses: 1,
+  // Keep this synthetic v1.0.125 exercise inside the production rollback envelope.
+  // The test is about exterior reach and scene-line protection, not stress-testing gain.
+  strength: 0.18,
+  maxBlend: 0.18,
+  highConfidenceStrengthBoost: 1,
+  highConfidenceBlendBoost: 1
 };
 
 test('v1.0.125 removes a watermark-shaped halo that sits outside direct alpha support', () => {
