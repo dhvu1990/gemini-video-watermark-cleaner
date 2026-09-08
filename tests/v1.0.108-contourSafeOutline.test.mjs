@@ -89,7 +89,7 @@ test('explicit contour-body override evaluates a strong closed outline after the
 });
 
 test('production rescue explicitly enables safe partial and confidence-guarded contour-body outline modes', () => {
-  const source = readFileSync(new URL('../src/video/structuredSmoothRescue.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url), 'utf8');
   assert.match(source, /partialSceneProtection: options\.outlineEscalationPartialSceneProtection !== false/);
   assert.match(source, /contourBodyOverride: policy\.mode !== 'medium' && options\.outlineEscalationContourBodyOverride !== false/);
   assert.match(source, /postChainOutlineSceneSafe = outlineResidualEscalation\?\.sceneEligible !== false/);
