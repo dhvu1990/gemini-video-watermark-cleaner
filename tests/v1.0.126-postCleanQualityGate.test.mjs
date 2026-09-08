@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { applyPostCleanQualityGate } from '../src/video/postCleanQualityGate.js';
+import { applyStructuredSmoothRescue } from '../src/video/structuredSmoothRescue.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function lumaAt(image, p) {
@@ -142,4 +143,34 @@ test('v1.0.126 candidate selection is quality-driven rather than confidence-driv
   assert.deepEqual(low.data, high.data);
   assert.equal(low.postCleanQualityGate.detectionConfidence, 0.42);
   assert.equal(high.postCleanQualityGate.detectionConfidence, 0.92);
+});
+
+test('v1.0.126 wrapper keeps post-clean output quality-driven across detection confidence', () => {
+  const { image, alpha } = syntheticSmoothScene({ artifact: true });
+  const run = (detectionConfidence) => applyStructuredSmoothRescue(
+    { ...image, data: new Uint8ClampedArray(image.data) },
+    alpha,
+    {},
+    {},
+    {
+      enabled: false,
+      detectionConfidence,
+      postCleanQualityGateOptions: rescueOptions
+    }
+  );
+
+  const low = run(0.42);
+  const high = run(0.92);
+  const lowDiag = low.structuredSmoothRescue;
+  const highDiag = high.structuredSmoothRescue;
+
+  assert.equal(lowDiag.postCleanQualityGateAccepted, true, JSON.stringify(lowDiag.postCleanQualityGate));
+  assert.equal(highDiag.postCleanQualityGateAccepted, true, JSON.stringify(highDiag.postCleanQualityGate));
+  assert.equal(lowDiag.postCleanQualityGate.selectedCandidate, highDiag.postCleanQualityGate.selectedCandidate);
+  assert.equal(lowDiag.postCleanQualityGate.core.selectedCandidate, highDiag.postCleanQualityGate.core.selectedCandidate);
+  assert.deepEqual(low.data, high.data);
+  assert.equal(lowDiag.inputDetectionConfidence, 0.42);
+  assert.equal(highDiag.inputDetectionConfidence, 0.92);
+  assert.equal(lowDiag.confidenceDecisionPolicy, 'quality-driven-post-gate');
+  assert.equal(highDiag.confidenceDecisionPolicy, 'quality-driven-post-gate');
 });
