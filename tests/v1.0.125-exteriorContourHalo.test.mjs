@@ -109,15 +109,7 @@ const permissive = {
   minAnchors: 2,
   maxRadius: 16,
   hardSceneGuard: 0.72,
-  maxPasses: 1,
-  // Keep this synthetic v1.0.125 exercise inside the production rollback envelope.
-  // Use enough blend to create real exterior pixel changes, but cap their luma step.
-  strength: 0.18,
-  maxBlend: 0.18,
-  maxLumaDelta: 4,
-  highConfidenceStrengthBoost: 1,
-  highConfidenceBlendBoost: 1,
-  highConfidenceLumaBoost: 0
+  maxPasses: 1
 };
 
 test('v1.0.125 removes a watermark-shaped halo that sits outside direct alpha support', () => {
