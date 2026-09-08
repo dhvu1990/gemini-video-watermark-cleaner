@@ -125,7 +125,7 @@ test('v1.0.120 wrapper runs core then scene escalation then interior ghost disso
 
 test('structure continuation runs after the v1.0.118 contour sweep', () => {
   const source = fs.readFileSync(
-    new URL('../src/video/structuredSmoothRescue.js', import.meta.url),
+    new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url),
     'utf8'
   );
   const contourIndex = source.indexOf('applyPostInternalContourDissolve');
