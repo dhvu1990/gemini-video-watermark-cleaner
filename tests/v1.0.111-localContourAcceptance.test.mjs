@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildBatchDetectionView } from '../src/batchPreviewModel.js';
 
-const rescueSource = readFileSync(new URL('../src/video/structuredSmoothRescue.js', import.meta.url), 'utf8');
+const rescueSource = readFileSync(new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url), 'utf8');
 
 test('v1.0.111 only relaxes conservative outline acceptance thresholds', () => {
   assert.match(rescueSource, /outlineEscalationPartialMinImprovement, 0\.012/);
