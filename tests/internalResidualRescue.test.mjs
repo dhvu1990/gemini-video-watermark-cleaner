@@ -82,7 +82,7 @@ test('internal rescue keeps bounded scene override and global rollback checks', 
 });
 
 test('structured rescue runs internal residual cleanup after contour cleanup', () => {
-  const source = readFileSync(new URL('../src/video/structuredSmoothRescue.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url), 'utf8');
   const contourIndex = source.indexOf('applyContourMicroInterpolation');
   const internalIndex = source.lastIndexOf('applyInternalResidualRescue');
   assert.ok(contourIndex >= 0);

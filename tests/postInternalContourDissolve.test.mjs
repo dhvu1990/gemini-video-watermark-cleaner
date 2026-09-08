@@ -72,7 +72,7 @@ function permissiveOptions(extra = {}) {
 
 test('texture-safe contour dissolve runs after internal residual rescue', () => {
   const source = fs.readFileSync(
-    new URL('../src/video/structuredSmoothRescue.js', import.meta.url),
+    new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url),
     'utf8'
   );
   const internalIndex = source.indexOf('const internalCandidate = applyInternalResidualRescue');

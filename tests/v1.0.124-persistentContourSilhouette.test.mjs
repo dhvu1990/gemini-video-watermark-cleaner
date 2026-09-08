@@ -80,7 +80,7 @@ test('v1.0.124 blocks persistent contour rescue below 40 percent detection confi
 });
 
 test('runtime wiring keeps the v1.0.124 contour pass and detection confidence visible in source', () => {
-  const rescueSource = readFileSync(new URL('../src/video/structuredSmoothRescue.js', import.meta.url), 'utf8');
+  const rescueSource = readFileSync(new URL('../src/video/structuredSmoothRescueCore.js', import.meta.url), 'utf8');
   const engineSource = readFileSync(new URL('../src/video/engine.js', import.meta.url), 'utf8');
   assert.match(rescueSource, /applyPersistentContourSilhouetteDissolve/);
   assert.match(rescueSource, /persistentContourSilhouetteDissolve/);
