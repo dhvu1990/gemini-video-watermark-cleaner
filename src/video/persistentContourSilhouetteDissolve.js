@@ -437,6 +437,68 @@ function assessCandidate(candidate, alphaMap, beforeOutline, beforeGlobal, optio
   };
 }
 
+// v1.0.126: the normal acceptance gate intentionally stays strict. When it rejects
+// a candidate on a genuinely smooth/low-scene-risk ROI, allow a second local-only
+// decision based on contour improvement. This targets the real-world failure mode
+// where the diamond silhouette is visibly reduced locally but the aggregate ROI
+// metric moves by a few hundredths and rolls the whole candidate back.
+function assessSmoothSceneFallback(candidate, assessment, beforeOutline, beforeGlobal, sceneRisk, policy, options = {}) {
+  const enabled = options.smoothSceneFallback !== false && policy.mode === 'high';
+  const maxSceneScore = Number.isFinite(options.smoothFallbackMaxSceneScore) ? options.smoothFallbackMaxSceneScore : 0.18;
+  const maxSceneDensity = Number.isFinite(options.smoothFallbackMaxSceneDensity) ? options.smoothFallbackMaxSceneDensity : 0.035;
+  const maxContinuityDensity = Number.isFinite(options.smoothFallbackMaxContinuityDensity) ? options.smoothFallbackMaxContinuityDensity : 0.020;
+  const sceneSafe = !sceneRisk?.protect
+    && sceneRisk?.level !== 'high'
+    && (Number(sceneRisk?.score) || 0) <= maxSceneScore
+    && (Number(sceneRisk?.density) || 0) <= maxSceneDensity
+    && (Number(sceneRisk?.continuityDensity) || 0) <= maxContinuityDensity;
+
+  const minCorrectedPixels = Math.max(4, Math.round(Number(options.smoothFallbackMinCorrectedPixels ?? 5)));
+  const minExteriorCorrectedPixels = Math.max(2, Math.round(Number(options.smoothFallbackMinExteriorCorrectedPixels ?? 3)));
+  const minLocalImprovement = Number.isFinite(options.smoothFallbackMinLocalImprovement) ? options.smoothFallbackMinLocalImprovement : 0.045;
+  const minExteriorLocalImprovement = Number.isFinite(options.smoothFallbackMinExteriorLocalImprovement) ? options.smoothFallbackMinExteriorLocalImprovement : 0.045;
+  const maxMeanBlend = Number.isFinite(options.smoothFallbackMaxMeanBlend) ? options.smoothFallbackMaxMeanBlend : 0.30;
+  const maxOutlineRatio = Number.isFinite(options.smoothFallbackMaxOutlineRatio) ? options.smoothFallbackMaxOutlineRatio : 1.015;
+  const maxTotalRatio = Number.isFinite(options.smoothFallbackMaxTotalRatio) ? options.smoothFallbackMaxTotalRatio : 1.035;
+  const maxLumaRatio = Number.isFinite(options.smoothFallbackMaxLumaRatio) ? options.smoothFallbackMaxLumaRatio : 1.040;
+  const maxChromaRatio = Number.isFinite(options.smoothFallbackMaxChromaRatio) ? options.smoothFallbackMaxChromaRatio : 1.030;
+
+  const localEvidence = candidate.correctedPixels >= minCorrectedPixels
+    && candidate.localImprovement >= minLocalImprovement;
+  const exteriorEvidence = candidate.exteriorCorrectedPixels >= minExteriorCorrectedPixels
+    && candidate.exteriorLocalImprovement >= minExteriorLocalImprovement;
+  const blendSafe = candidate.meanBlend <= maxMeanBlend;
+  const outlineSafe = assessment.afterOutline.score <= beforeOutline.score * maxOutlineRatio + 0.03;
+  const aggregateSafe = assessment.afterGlobal.total <= beforeGlobal.total * maxTotalRatio + 0.10
+    && assessment.afterGlobal.luma <= beforeGlobal.luma * maxLumaRatio + 0.12
+    && assessment.afterGlobal.chroma <= beforeGlobal.chroma * maxChromaRatio + 0.45;
+  const accepted = enabled && sceneSafe && blendSafe && outlineSafe && aggregateSafe && (localEvidence || exteriorEvidence);
+
+  return {
+    enabled,
+    attempted: enabled && !assessment.accepted,
+    accepted,
+    sceneSafe,
+    localEvidence,
+    exteriorEvidence,
+    blendSafe,
+    outlineSafe,
+    aggregateSafe,
+    maxSceneScore,
+    maxSceneDensity,
+    maxContinuityDensity,
+    minCorrectedPixels,
+    minExteriorCorrectedPixels,
+    minLocalImprovement,
+    minExteriorLocalImprovement,
+    maxMeanBlend,
+    maxOutlineRatio,
+    maxTotalRatio,
+    maxLumaRatio,
+    maxChromaRatio
+  };
+}
+
 export function applyPersistentContourSilhouetteDissolve(image, alphaMap, options = {}) {
   const policy = confidencePolicy(options);
   const beforeOutline = measureGeometricOutlineResidual(image, alphaMap, outlineMeasurementOptions(options));
@@ -471,6 +533,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
         afterGlobal: beforeGlobal,
         globalSafe: true,
         exteriorGlobalSafe: true,
+        smoothSceneFallback: { enabled: options.smoothSceneFallback !== false && policy.mode === 'high', attempted: false, accepted: false },
         correctedPixels: 0,
         exteriorCorrectedPixels: 0,
         maxExteriorDistance: 0,
@@ -488,10 +551,13 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   let currentGlobal = beforeGlobal;
   let finalCandidate = null;
   let finalAssessment = null;
+  let finalFallback = null;
   let lastAcceptedCandidate = null;
   let lastAcceptedAssessment = null;
+  let lastAcceptedFallback = null;
   let passesAttempted = 0;
   let passesAccepted = 0;
+  let fallbackPassesAccepted = 0;
   let totalCorrectedPixels = 0;
   let totalExteriorCorrectedPixels = 0;
 
@@ -504,10 +570,15 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
     };
     const candidate = buildCandidate(selected, alphaMap, policy, passOptions);
     const assessment = assessCandidate(candidate, alphaMap, currentOutline, currentGlobal, passOptions);
+    const fallback = assessment.accepted
+      ? { enabled: options.smoothSceneFallback !== false && policy.mode === 'high', attempted: false, accepted: false }
+      : assessSmoothSceneFallback(candidate, assessment, currentOutline, currentGlobal, sceneRisk, policy, passOptions);
+    const passAccepted = assessment.accepted || fallback.accepted;
     passesAttempted++;
     finalCandidate = candidate;
     finalAssessment = assessment;
-    if (!assessment.accepted) break;
+    finalFallback = fallback;
+    if (!passAccepted) break;
     selected = { width: candidate.width, height: candidate.height, data: new Uint8ClampedArray(candidate.data) };
     currentOutline = assessment.afterOutline;
     currentGlobal = assessment.afterGlobal;
@@ -515,13 +586,16 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
     totalExteriorCorrectedPixels += candidate.exteriorCorrectedPixels;
     lastAcceptedCandidate = candidate;
     lastAcceptedAssessment = assessment;
+    lastAcceptedFallback = fallback;
     passesAccepted++;
+    if (fallback.accepted) fallbackPassesAccepted++;
     if (currentOutline.score < minScore * 0.78 || currentOutline.candidateDensity < minDensity * 0.72) break;
   }
 
   const accepted = passesAccepted > 0;
   const effectiveCandidate = accepted ? lastAcceptedCandidate : finalCandidate;
   const effectiveAssessment = accepted ? lastAcceptedAssessment : finalAssessment;
+  const effectiveFallback = accepted ? lastAcceptedFallback : finalFallback;
   const afterOutline = accepted ? currentOutline : beforeOutline;
   const afterGlobal = accepted ? currentGlobal : beforeGlobal;
   const remainingStrong = afterOutline.score >= minScore
@@ -529,9 +603,11 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
     && afterOutline.samples >= minSamples
     && afterOutline.sectorSupport >= minSectors;
   const acceptanceMode = accepted
-    ? (effectiveAssessment?.localContourAccepted
-      ? 'local-contour-metric'
-      : (effectiveAssessment?.exteriorContourAccepted ? 'exterior-contour-metric' : 'accepted'))
+    ? (effectiveFallback?.accepted
+      ? 'smooth-scene-local-fallback'
+      : (effectiveAssessment?.localContourAccepted
+        ? 'local-contour-metric'
+        : (effectiveAssessment?.exteriorContourAccepted ? 'exterior-contour-metric' : 'accepted')))
     : 'rejected';
   return {
     width: image.width,
@@ -556,6 +632,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       candidateAfterGlobal: effectiveAssessment?.afterGlobal || beforeGlobal,
       globalSafe: effectiveAssessment?.globalSafe ?? true,
       exteriorGlobalSafe: effectiveAssessment?.exteriorGlobalSafe ?? true,
+      smoothSceneFallback: effectiveFallback || { enabled: options.smoothSceneFallback !== false && policy.mode === 'high', attempted: false, accepted: false },
       correctedPixels: accepted ? totalCorrectedPixels : 0,
       exteriorCorrectedPixels: accepted ? totalExteriorCorrectedPixels : 0,
       candidateCorrectedPixels: effectiveCandidate?.correctedPixels || 0,
@@ -587,6 +664,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       maxExteriorOutlineRatio: effectiveAssessment?.maxExteriorOutlineRatio ?? Number(options.maxExteriorOutlineRatio ?? 1.006),
       passesAttempted,
       passesAccepted,
+      fallbackPassesAccepted,
       maxPasses,
       remainingStrong
     }
