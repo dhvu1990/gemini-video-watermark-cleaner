@@ -1,5 +1,7 @@
 import { applyPersistentContourSilhouetteDissolve as applyPersistentContourCore } from './persistentContourSilhouetteDissolveCore.js';
 import { applyHighConfidenceBodyResidualRescue } from './highConfidenceBodyResidualRescue.js';
+import { applyBoundaryAwareBackgroundReconstruction } from './boundaryBackgroundReconstruction.js';
+import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
 
 function finite(value, fallback = 0) {
   const number = Number(value);
@@ -30,7 +32,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   const coreDiagnostics = core.persistentContourSilhouetteDissolve || null;
   if (!coreDiagnostics) return core;
 
-  const selected = cloneImage(core);
+  let selected = cloneImage(core);
   const preBodyRemainingStrong = coreDiagnostics.remainingStrong === true;
   const detectionConfidence = finite(
     coreDiagnostics.confidencePolicy?.confidence,
@@ -50,42 +52,86 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   );
   const bodyResidualRescue = bodyResult.highConfidenceBodyResidualRescue || null;
   const bodyResidualAccepted = Boolean(bodyResidualRescue?.accepted);
+  if (bodyResidualAccepted) selected = cloneImage(bodyResult);
 
-  if (!bodyResidualAccepted) {
-    return {
-      width: core.width,
-      height: core.height,
-      data: new Uint8ClampedArray(core.data),
-      persistentContourSilhouetteDissolve: {
-        ...coreDiagnostics,
-        preBodyRemainingStrong,
-        bodyResidualAccepted: false,
-        bodyResidualCorrectedPixels: 0,
-        bodyResidualRescue
-      }
-    };
-  }
+  // Background reconstruction has its own independent scene-risk gate. Do not
+  // inherit legacy/tuning overrides used by contour tests: reconstructing the
+  // full watermark body must remain conservative around genuine crossing edges.
+  const backgroundSceneRisk = measureCrossingSceneEdgeRisk(
+    selected,
+    alphaMap,
+    options.backgroundReconstructionSceneEdgeOptions || {}
+  );
+  const backgroundSceneSafe = !backgroundSceneRisk.protect && backgroundSceneRisk.level !== 'high';
+  const backgroundTrigger = options.backgroundReconstruction !== false
+    && detectionConfidence >= finite(options.backgroundReconstructionMinConfidence, 0.50)
+    && backgroundSceneSafe
+    && Boolean(
+      coreDiagnostics.attempted
+      || coreDiagnostics.accepted
+      || coreDiagnostics.remainingStrong
+      || bodyResidualAccepted
+    );
+  const backgroundResult = applyBoundaryAwareBackgroundReconstruction(
+    selected,
+    alphaMap,
+    {
+      enabled: backgroundTrigger,
+      detectionConfidence,
+      sceneEdgeOptions: options.sceneEdgeOptions || {},
+      ...(options.backgroundReconstructionOptions || {})
+    }
+  );
+  const backgroundReconstruction = backgroundResult.backgroundReconstruction || null;
+  const backgroundAccepted = Boolean(backgroundReconstruction?.accepted);
+  if (backgroundAccepted) selected = cloneImage(backgroundResult);
 
-  const afterOutline = bodyResidualRescue.afterOutline || coreDiagnostics.afterOutline;
-  const afterGlobal = bodyResidualRescue.afterGlobal || coreDiagnostics.afterGlobal;
-  const remainingStrong = strongOutline(afterOutline, options);
   const coreAccepted = Boolean(coreDiagnostics.accepted);
+  const anyAccepted = coreAccepted || bodyResidualAccepted || backgroundAccepted;
+  const afterOutline = bodyResidualAccepted
+    ? (bodyResidualRescue.afterOutline || coreDiagnostics.afterOutline)
+    : coreDiagnostics.afterOutline;
+  const afterGlobal = backgroundAccepted
+    ? (backgroundReconstruction.afterResidual || bodyResidualRescue?.afterGlobal || coreDiagnostics.afterGlobal)
+    : (bodyResidualAccepted
+      ? (bodyResidualRescue.afterGlobal || coreDiagnostics.afterGlobal)
+      : coreDiagnostics.afterGlobal);
+  const remainingStrong = strongOutline(afterOutline, options);
   const correctedPixels = finite(coreDiagnostics.correctedPixels, 0)
-    + finite(bodyResidualRescue.correctedPixels, 0);
+    + (bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0)
+    + (backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0);
+
+  // Preserve the historical acceptanceMode contract whenever the core pass
+  // already accepted. New post-processing provenance is exposed separately.
   const acceptanceMode = coreAccepted
     ? coreDiagnostics.acceptanceMode
-    : 'high-confidence-body-residual';
+    : (bodyResidualAccepted
+      ? 'high-confidence-body-residual'
+      : (backgroundAccepted ? 'boundary-background-reconstruction' : coreDiagnostics.acceptanceMode));
+  const postAcceptanceMode = backgroundAccepted
+    ? (bodyResidualAccepted ? 'body+background-reconstruction' : 'boundary-background-reconstruction')
+    : (bodyResidualAccepted ? 'high-confidence-body-residual' : acceptanceMode);
+  const reason = coreAccepted
+    ? coreDiagnostics.reason
+    : (backgroundAccepted
+      ? 'background-reconstruction-improvement'
+      : (bodyResidualAccepted ? 'body-residual-improvement' : coreDiagnostics.reason));
 
   return {
-    width: bodyResult.width,
-    height: bodyResult.height,
-    data: new Uint8ClampedArray(bodyResult.data),
+    width: selected.width,
+    height: selected.height,
+    data: new Uint8ClampedArray(selected.data),
     persistentContourSilhouetteDissolve: {
       ...coreDiagnostics,
-      attempted: Boolean(coreDiagnostics.attempted || bodyResidualRescue.attempted),
-      accepted: true,
-      reason: coreAccepted ? coreDiagnostics.reason : 'body-residual-improvement',
+      attempted: Boolean(
+        coreDiagnostics.attempted
+        || bodyResidualRescue?.attempted
+        || backgroundReconstruction?.attempted
+      ),
+      accepted: anyAccepted,
+      reason,
       acceptanceMode,
+      postAcceptanceMode,
       afterOutline,
       afterGlobal,
       outlineImprovement: finite(coreDiagnostics.beforeOutline?.score, 0) > 1e-9
@@ -94,9 +140,15 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       correctedPixels,
       preBodyRemainingStrong,
       remainingStrong,
-      bodyResidualAccepted: true,
-      bodyResidualCorrectedPixels: finite(bodyResidualRescue.correctedPixels, 0),
-      bodyResidualRescue
+      bodyResidualAccepted,
+      bodyResidualCorrectedPixels: bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0,
+      bodyResidualRescue,
+      backgroundSceneRisk,
+      backgroundSceneSafe,
+      backgroundReconstructionTriggered: backgroundTrigger,
+      backgroundReconstructionAccepted: backgroundAccepted,
+      backgroundReconstructionCorrectedPixels: backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0,
+      backgroundReconstruction
     }
   };
 }
