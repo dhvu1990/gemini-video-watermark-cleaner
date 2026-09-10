@@ -153,14 +153,25 @@ function shiftQuality(shift) {
   return clamp(improvement * 0.50 + errorQuality * 0.26 + motionQuality * 0.24, 0, 1);
 }
 
+function shiftEligible(shift, minImprovement) {
+  return Number.isFinite(shift?.error) && Number.isFinite(shift?.baseline) && shift.improvement >= minImprovement;
+}
+
 export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
   const { width, height } = current;
   const maxHistory = Math.max(1, Math.min(12, Math.round(options.maxHistory || 8)));
   const minImprovement = Number.isFinite(options.minImprovement) ? options.minImprovement : 0.08;
   const requestedMaxShift = Math.max(1, Math.min(24, Math.round(options.maxShift || 8)));
-  // v1.0.129: search a wider motion window, but estimateAtlasShift uses coarse-to-fine
-  // sampling so the wider search does not multiply frame cost as aggressively.
-  const maxShift = Math.max(requestedMaxShift, Math.min(20, Math.max(12, Math.round(options.temporalExposureMaxShift || 18))));
+  // v1.0.129 keeps the legacy atlas inside its requested motion window so old
+  // ring/cleaned-donor behavior remains stable. The observed clean-exposure path
+  // may search farther because it has stricter clean-pixel and consensus gates.
+  const observedMaxShift = Math.max(
+    requestedMaxShift,
+    Math.min(20, Math.max(12, Math.round(options.temporalExposureMaxShift || 18)))
+  );
+  const observedMinImprovement = Number.isFinite(options.observedMinImprovement)
+    ? Math.max(0, options.observedMinImprovement)
+    : Math.max(minImprovement, 0.06);
   const allowMaskedDonors = options.allowMaskedDonors === true;
   const donorSpreadSoft = Number.isFinite(options.donorSpreadSoft) ? Math.max(0, options.donorSpreadSoft) : 10;
   const donorSpreadHard = Number.isFinite(options.donorSpreadHard) ? Math.max(donorSpreadSoft + 1, options.donorSpreadHard) : 32;
@@ -171,9 +182,22 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
 
   for (const donor of (history || []).slice(-maxHistory)) {
     if (!donor || donor.width !== width || donor.height !== height) continue;
-    const shift = estimateAtlasShift(current, donor, alphaMap, maxShift);
-    if (!Number.isFinite(shift.error) || shift.improvement < minImprovement) continue;
-    donors.push({ image: donor, shift, quality: shiftQuality(shift) });
+    const legacyShift = estimateAtlasShift(current, donor, alphaMap, requestedMaxShift);
+    const legacyEligible = shiftEligible(legacyShift, minImprovement);
+    const observedShift = observedMaxShift > requestedMaxShift
+      ? estimateAtlasShift(current, donor, alphaMap, observedMaxShift)
+      : legacyShift;
+    const observedEligible = shiftEligible(observedShift, observedMinImprovement);
+    if (!legacyEligible && !observedEligible) continue;
+    donors.push({
+      image: donor,
+      shift: legacyShift,
+      legacyShift,
+      observedShift,
+      legacyEligible,
+      observedEligible,
+      quality: shiftQuality(observedShift)
+    });
   }
 
   const data = new Uint8ClampedArray(current.data.length);
@@ -201,22 +225,31 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
       const observedQualities = [];
 
       for (const donor of donors) {
-        const sx = x + donor.shift.dx;
-        const sy = y + donor.shift.dy;
-        const observed = isObservedCleanPixel(alphaMap, width, height, sx, sy, safetyRadius);
-        if (!validDonorPixel(alphaMap, width, height, sx, sy, allowMaskedDonors)) continue;
-        const rgb = sampleRgb(donor.image, sx, sy);
-        if (!rgb) continue;
-        channels[0].push(rgb[0]);
-        channels[1].push(rgb[1]);
-        channels[2].push(rgb[2]);
-        donorLuma.push(0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]);
-        improvements.push(donor.shift.improvement);
-        if (observed) {
-          observedChannels[0].push(rgb[0]);
-          observedChannels[1].push(rgb[1]);
-          observedChannels[2].push(rgb[2]);
-          observedLuma.push(0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]);
+        if (donor.legacyEligible) {
+          const sx = x + donor.legacyShift.dx;
+          const sy = y + donor.legacyShift.dy;
+          if (validDonorPixel(alphaMap, width, height, sx, sy, allowMaskedDonors)) {
+            const rgb = sampleRgb(donor.image, sx, sy);
+            if (rgb) {
+              channels[0].push(rgb[0]);
+              channels[1].push(rgb[1]);
+              channels[2].push(rgb[2]);
+              donorLuma.push(0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2]);
+              improvements.push(donor.legacyShift.improvement);
+            }
+          }
+        }
+
+        if (donor.observedEligible) {
+          const ox = x + donor.observedShift.dx;
+          const oy = y + donor.observedShift.dy;
+          if (!isObservedCleanPixel(alphaMap, width, height, ox, oy, safetyRadius)) continue;
+          const observedRgb = sampleRgb(donor.image, ox, oy);
+          if (!observedRgb) continue;
+          observedChannels[0].push(observedRgb[0]);
+          observedChannels[1].push(observedRgb[1]);
+          observedChannels[2].push(observedRgb[2]);
+          observedLuma.push(0.2126 * observedRgb[0] + 0.7152 * observedRgb[1] + 0.0722 * observedRgb[2]);
           observedQualities.push(donor.quality);
         }
       }
@@ -282,7 +315,9 @@ export function buildBackgroundAtlas(current, history, alphaMap, options = {}) {
     observedSpreadSoft,
     observedSpreadHard,
     observedSafetyRadius: safetyRadius,
-    maxShift,
+    maxShift: requestedMaxShift,
+    observedMaxShift,
+    observedMinImprovement,
     temporalObservedAtlas: true
   };
 }
@@ -368,6 +403,7 @@ export function applyBackgroundAtlas(processed, alphaMap, atlas, strength = 0.92
       observedCoreSupportedPixels: atlas.observedCoreSupportedPixels || 0,
       donorCount: atlas.donorCount || 0,
       maxShift: atlas.maxShift || null,
+      observedMaxShift: atlas.observedMaxShift || atlas.maxShift || null,
       source: 'motion-aligned-clean-exposure'
     }
   };
@@ -419,6 +455,8 @@ export function summarizeAtlas(atlas) {
     observedCoverage: atlas.watermarkPixels ? (atlas.observedCoreSupportedPixels || 0) / atlas.watermarkPixels : 0,
     observedSafetyRadius: atlas.observedSafetyRadius ?? null,
     maxShift: atlas.maxShift ?? null,
+    observedMaxShift: atlas.observedMaxShift ?? atlas.maxShift ?? null,
+    observedMinImprovement: atlas.observedMinImprovement ?? null,
     temporalObservedAtlas: Boolean(atlas.temporalObservedAtlas)
   };
 }
