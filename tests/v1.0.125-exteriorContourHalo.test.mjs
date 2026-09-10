@@ -88,6 +88,9 @@ function ringError(image, ringMask) {
   return count ? sum / count : 0;
 }
 
+// This historical v1.0.125 fixture is intentionally permissive. Keep later
+// v1.0.126/v1.0.127 gates from changing what this test is measuring: exterior
+// halo correction and per-pixel scene-line protection.
 const permissive = {
   minScore: 0.12,
   minDensity: 0.004,
@@ -109,7 +112,20 @@ const permissive = {
   minAnchors: 2,
   maxRadius: 16,
   hardSceneGuard: 0.72,
-  maxPasses: 1
+  maxPasses: 1,
+  smoothFallbackMinCorrectedPixels: 1,
+  smoothFallbackMinExteriorCorrectedPixels: 1,
+  smoothFallbackMinLocalImprovement: 0,
+  smoothFallbackMinExteriorLocalImprovement: 0,
+  smoothFallbackMaxMeanBlend: 1,
+  smoothFallbackMaxOutlineRatio: 10,
+  smoothFallbackMaxTotalRatio: 10,
+  smoothFallbackMaxLumaRatio: 10,
+  smoothFallbackMaxChromaRatio: 10,
+  smoothFallbackMaxSceneScore: 1,
+  smoothFallbackMaxSceneDensity: 1,
+  smoothFallbackMaxContinuityDensity: 1,
+  highConfidenceBodyResidualRescue: false
 };
 
 test('v1.0.125 removes a watermark-shaped halo that sits outside direct alpha support', () => {
@@ -139,7 +155,10 @@ test('v1.0.125 keeps a real crossing scene line guarded while correcting the ext
     detectionConfidence: 0.90,
     outerBandRadius: 3,
     outerBandScale: 0.92,
-    hardSceneGuard: 0.48
+    hardSceneGuard: 0.48,
+    // The historical assertion is about the local scene guard. Prevent the
+    // newer global scene classifier from short-circuiting that local test.
+    sceneEdgeOptions: { highScore: 2, mediumScore: 2 }
   });
   const diag = result.persistentContourSilhouetteDissolve;
   const summary = diagnosticSummary(diag);
