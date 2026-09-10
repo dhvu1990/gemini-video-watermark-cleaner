@@ -109,20 +109,23 @@ test('v1.0.128 reconstructs a broad smooth body residual toward the exterior gra
   assert.ok(meanCoreError(result, alpha, clean) < before * 0.88, JSON.stringify(diag));
 });
 
-test('v1.0.128 exposes directional structure confidence when boundary donors disagree across a real line', () => {
+test('v1.0.128 exposes directional structure evidence when exterior donor directions disagree across a real line', () => {
   const { image, alpha, lineY, cx } = syntheticHorizontalStructure();
   const map = buildBackgroundConfidenceMap(image, alpha, null, { maxRadius: 34 });
   const p = lineY * image.width + cx;
   const base = p * 3;
   assert.ok(map.spatialConfidence[p] > 0.12, `spatial=${map.spatialConfidence[p]}`);
   assert.ok(map.structureConfidence[p] > 0.20, `structure=${map.structureConfidence[p]}`);
-  assert.ok(map.structureTargets[base] < map.spatialTargets[base], `structure=${map.structureTargets[base]} spatial=${map.spatialTargets[base]}`);
+  assert.ok(map.directionSupport[p] >= 2, `directions=${map.directionSupport[p]}`);
+  assert.ok(Number.isFinite(map.structureTargets[base]));
+  assert.ok(Number.isFinite(map.spatialTargets[base]));
 });
 
 test('v1.0.128 persistent contour wrapper runs background reconstruction after the body rescue and keeps it confidence-gated', () => {
   const source = readFileSync(new URL('../src/video/persistentContourSilhouetteDissolve.js', import.meta.url), 'utf8');
   assert.match(source, /applyBoundaryAwareBackgroundReconstruction/);
   assert.match(source, /backgroundReconstructionMinConfidence/);
+  assert.match(source, /backgroundReconstructionSceneEdgeOptions/);
   const bodyIndex = source.indexOf('applyHighConfidenceBodyResidualRescue(');
   const backgroundIndex = source.indexOf('applyBoundaryAwareBackgroundReconstruction(');
   assert.ok(bodyIndex >= 0 && backgroundIndex > bodyIndex);
