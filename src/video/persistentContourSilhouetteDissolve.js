@@ -1,6 +1,7 @@
 import { applyPersistentContourSilhouetteDissolve as applyPersistentContourCore } from './persistentContourSilhouetteDissolveCore.js';
 import { applyHighConfidenceBodyResidualRescue } from './highConfidenceBodyResidualRescue.js';
 import { applyBoundaryAwareBackgroundReconstruction } from './boundaryBackgroundReconstruction.js';
+import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
 
 function finite(value, fallback = 0) {
   const number = Number(value);
@@ -53,8 +54,18 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   const bodyResidualAccepted = Boolean(bodyResidualRescue?.accepted);
   if (bodyResidualAccepted) selected = cloneImage(bodyResult);
 
+  // Background reconstruction has its own independent scene-risk gate. Do not
+  // inherit legacy/tuning overrides used by contour tests: reconstructing the
+  // full watermark body must remain conservative around genuine crossing edges.
+  const backgroundSceneRisk = measureCrossingSceneEdgeRisk(
+    selected,
+    alphaMap,
+    options.backgroundReconstructionSceneEdgeOptions || {}
+  );
+  const backgroundSceneSafe = !backgroundSceneRisk.protect && backgroundSceneRisk.level !== 'high';
   const backgroundTrigger = options.backgroundReconstruction !== false
     && detectionConfidence >= finite(options.backgroundReconstructionMinConfidence, 0.50)
+    && backgroundSceneSafe
     && Boolean(
       coreDiagnostics.attempted
       || coreDiagnostics.accepted
@@ -89,11 +100,22 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   const correctedPixels = finite(coreDiagnostics.correctedPixels, 0)
     + (bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0)
     + (backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0);
-  const acceptanceMode = backgroundAccepted
-    ? (bodyResidualAccepted ? 'body+background-reconstruction' : 'boundary-background-reconstruction')
+
+  // Preserve the historical acceptanceMode contract whenever the core pass
+  // already accepted. New post-processing provenance is exposed separately.
+  const acceptanceMode = coreAccepted
+    ? coreDiagnostics.acceptanceMode
     : (bodyResidualAccepted
-      ? (coreAccepted ? coreDiagnostics.acceptanceMode : 'high-confidence-body-residual')
-      : coreDiagnostics.acceptanceMode);
+      ? 'high-confidence-body-residual'
+      : (backgroundAccepted ? 'boundary-background-reconstruction' : coreDiagnostics.acceptanceMode));
+  const postAcceptanceMode = backgroundAccepted
+    ? (bodyResidualAccepted ? 'body+background-reconstruction' : 'boundary-background-reconstruction')
+    : (bodyResidualAccepted ? 'high-confidence-body-residual' : acceptanceMode);
+  const reason = coreAccepted
+    ? coreDiagnostics.reason
+    : (backgroundAccepted
+      ? 'background-reconstruction-improvement'
+      : (bodyResidualAccepted ? 'body-residual-improvement' : coreDiagnostics.reason));
 
   return {
     width: selected.width,
@@ -107,12 +129,9 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
         || backgroundReconstruction?.attempted
       ),
       accepted: anyAccepted,
-      reason: backgroundAccepted
-        ? 'background-reconstruction-improvement'
-        : (bodyResidualAccepted
-          ? (coreAccepted ? coreDiagnostics.reason : 'body-residual-improvement')
-          : coreDiagnostics.reason),
+      reason,
       acceptanceMode,
+      postAcceptanceMode,
       afterOutline,
       afterGlobal,
       outlineImprovement: finite(coreDiagnostics.beforeOutline?.score, 0) > 1e-9
@@ -124,6 +143,8 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       bodyResidualAccepted,
       bodyResidualCorrectedPixels: bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0,
       bodyResidualRescue,
+      backgroundSceneRisk,
+      backgroundSceneSafe,
       backgroundReconstructionTriggered: backgroundTrigger,
       backgroundReconstructionAccepted: backgroundAccepted,
       backgroundReconstructionCorrectedPixels: backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0,
