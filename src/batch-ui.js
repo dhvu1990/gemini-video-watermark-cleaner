@@ -1,4 +1,4 @@
-import { batchFileKey, batchOutputName, BATCH_STATUSES, runnableBatchItems, summarizeBatch } from './batch.js';
+import { batchFileKey, batchOutputName, BATCH_STATUSES, runnableBatchItems, sortBatchFiles, summarizeBatch } from './batch.js';
 import {
   BATCH_WORKER_MAX_RETRIES,
   batchWorkerRetryDelayMs,
@@ -80,7 +80,10 @@ function nextFrame() {
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 async function addFilesDeferred(files) {
-  const selected = Array.from(files || []);
+  // FileList ordering varies by picker/browser. Normalize it once so preview,
+  // Clean all, progress and downloads all follow human scene order (scene1,
+  // scene2, ... scene10) instead of the OS selection order.
+  const selected = sortBatchFiles(files);
   if (!selected.length || state.running || state.ingesting || state.previewAnalyzing) return;
   state.ingesting = true;
   render();
@@ -99,6 +102,9 @@ async function addFilesDeferred(files) {
           existing.add(key);
         }
       }
+      // Also keep a stable natural order when a user adds another selection to
+      // an existing queue.
+      state.items.sort((a, b) => sortBatchFiles([a.file, b.file])[0] === a.file ? -1 : 1);
       if (els.batchSummary) els.batchSummary.textContent = `Adding files… ${Math.min(offset + chunk.length, selected.length)}/${selected.length}`;
       await nextFrame();
     }
@@ -106,7 +112,7 @@ async function addFilesDeferred(files) {
     state.ingesting = false;
     render();
   }
-  if (added.length) setTimeout(() => analyzeBatchPreviews(added), 0);
+  if (added.length) setTimeout(() => analyzeBatchPreviews(added.sort((a, b) => sortBatchFiles([a.file, b.file])[0] === a.file ? -1 : 1)), 0);
 }
 function removeItem(key) {
   if (state.running || state.ingesting || state.previewAnalyzing) return;
@@ -224,228 +230,227 @@ function render() {
   }
 }
 
-function disposeBatchWorker(worker = state.activeWorker) {
-  if (!worker) return;
-  try { worker.terminate(); } catch {}
-  if (state.activeWorker === worker) state.activeWorker = null;
-}
-function getBatchWorker() {
-  if (state.activeWorker) return state.activeWorker;
-  const worker = new Worker(new URL('./video/worker.js', import.meta.url), { type: 'module' });
-  state.activeWorker = worker;
-  return worker;
-}
-function workerTransportError(message) {
-  const error = new Error(message || 'Worker transport failed');
-  error.code = 'BATCH_WORKER_TRANSPORT';
-  return error;
-}
-function runWorkerOnce(type, file, options, onProgress) {
-  return new Promise((resolve, reject) => {
-    const worker = getBatchWorker();
-    const tag = `batch:${Date.now()}:${Math.random().toString(36).slice(2)}`;
-    let settled = false;
-    const cleanup = () => {
-      worker.removeEventListener('message', onMessage);
-      worker.removeEventListener('error', onError);
-      worker.removeEventListener('messageerror', onMessageError);
-    };
-    const finishResolve = (value) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      resolve(value);
-    };
-    const finishReject = (error) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(error);
-    };
-    const onMessage = (event) => {
-      const message = event.data || {};
-      if (message.tag !== tag) return;
-      if (message.type === 'progress') { onProgress?.(message); return; }
-      if (message.type === 'inspect-result' || message.type === 'process-result') finishResolve(message);
-      else if (message.type === 'cancelled') finishReject(new DOMException('Cancelled', 'AbortError'));
-      else if (message.type === 'error') finishReject(new Error(message.error || 'Worker failed'));
-    };
-    const onError = (event) => {
-      disposeBatchWorker(worker);
-      finishReject(workerTransportError(event?.message || 'Worker network/module error'));
-    };
-    const onMessageError = () => {
-      disposeBatchWorker(worker);
-      finishReject(workerTransportError('Worker message transport error'));
-    };
-    worker.addEventListener('message', onMessage);
-    worker.addEventListener('error', onError);
-    worker.addEventListener('messageerror', onMessageError);
-    try { worker.postMessage({ type, tag, file, options }); }
-    catch (error) { disposeBatchWorker(worker); finishReject(error); }
-  });
-}
-async function runWorker(type, file, options, onProgress) {
-  let retriesUsed = 0;
-  while (true) {
-    try {
-      return await runWorkerOnce(type, file, options, onProgress);
-    } catch (error) {
-      if (!shouldRetryBatchWorkerError(error, retriesUsed, BATCH_WORKER_MAX_RETRIES)) throw error;
-      retriesUsed += 1;
-      disposeBatchWorker();
-      onProgress?.({ status: `Transient network/worker error — reconnecting ${retriesUsed}/${BATCH_WORKER_MAX_RETRIES}`, progress: 0 });
-      await wait(batchWorkerRetryDelayMs(retriesUsed));
-    }
+async function pickOutputFolder() {
+  if (!window.showDirectoryPicker || state.running || state.ingesting || state.previewAnalyzing) return;
+  try {
+    state.outputDirectory = await window.showDirectoryPicker({ mode: 'readwrite' });
+    els.batchOutputFolderName.textContent = state.outputDirectory?.name || 'Selected folder';
+  } catch (error) {
+    if (error?.name !== 'AbortError') throw error;
   }
 }
 
-async function analyzeOnePreview(item, options) {
-  item.autoDetectStatus = 'analyzing';
-  item.autoDetectProgress = 0.01;
-  item.autoDetectError = '';
-  render();
-  try {
-    const inspected = await runWorker('inspect', item.file, options, (message) => {
-      item.autoDetectProgress = Math.max(0.01, Math.min(1, Number(message.progress) || 0));
-      item.autoDetectError = message.status || 'Analyzing';
-      render();
-    });
-    item.detection = inspected.result?.detection || null;
-    item.preview = inspected.result?.preview || null;
-    item.inspectOptions = { ...options };
-    item.autoDetectStatus = 'ready';
-    item.autoDetectProgress = 1;
-    item.autoDetectError = '';
-  } catch (error) {
-    item.autoDetectStatus = error?.name === 'AbortError' ? 'pending' : 'error';
-    item.autoDetectProgress = 0;
-    item.autoDetectError = error?.message || String(error);
-  }
-  render();
+function revokeItemOutput(item) {
+  if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
+  item.outputUrl = null;
 }
+
+async function analyzeBatchItem(item, options, { preview = true } = {}) {
+  const worker = new Worker(new URL('./video/worker.js', import.meta.url), { type: 'module' });
+  state.activeWorker = worker;
+  let settled = false;
+  try {
+    const result = await new Promise((resolve, reject) => {
+      worker.onmessage = (event) => {
+        const data = event.data || {};
+        if (data.type === 'inspect-progress') {
+          item.autoDetectProgress = Number(data.progress) || 0;
+          item.autoDetectError = data.phase || '';
+          render();
+          return;
+        }
+        if (data.type === 'inspect-result') { settled = true; resolve(data); return; }
+        if (data.type === 'error') { settled = true; reject(new Error(data.message || 'Inspection failed')); }
+      };
+      worker.onerror = (event) => { if (!settled) reject(new Error(event.message || 'Inspection worker failed')); };
+      worker.postMessage({ type: 'inspect', file: item.file, options, preview });
+    });
+    return result;
+  } finally {
+    worker.terminate();
+    if (state.activeWorker === worker) state.activeWorker = null;
+  }
+}
+
 async function analyzeBatchPreviews(items = state.items) {
-  if (state.running || state.ingesting || state.previewAnalyzing) return;
-  const targets = items.filter((item) => item && item.autoDetectStatus !== 'ready');
-  if (!targets.length) return;
+  if (state.running || state.ingesting || state.previewAnalyzing || !items.length) return;
   state.previewAnalyzing = true;
   state.cancelled = false;
   render();
-  const options = inspectOptions();
-  for (const item of targets) {
-    if (state.cancelled) break;
-    await analyzeOnePreview(item, options);
+  try {
+    const options = inspectOptions();
+    for (const item of items) {
+      if (state.cancelled) break;
+      item.autoDetectStatus = 'analyzing';
+      item.autoDetectProgress = 0;
+      item.autoDetectError = '';
+      render();
+      try {
+        const result = await analyzeBatchItem(item, options, { preview: true });
+        item.detection = result.detection || null;
+        item.preview = result.preview || null;
+        item.inspectOptions = { ...options };
+        item.autoDetectStatus = 'ready';
+        item.autoDetectProgress = 1;
+        item.autoDetectError = '';
+      } catch (error) {
+        if (state.cancelled) break;
+        item.autoDetectStatus = 'error';
+        item.autoDetectError = error?.message || 'Auto-detect preview failed';
+      }
+      render();
+      await nextFrame();
+    }
+  } finally {
+    if (state.cancelled) {
+      for (const item of items) {
+        if (item.autoDetectStatus === 'analyzing') {
+          item.autoDetectStatus = 'pending';
+          item.autoDetectProgress = 0;
+          item.autoDetectError = '';
+        }
+      }
+    }
+    state.previewAnalyzing = false;
+    state.activeWorker = null;
+    render();
   }
-  state.previewAnalyzing = false;
-  state.cancelled = false;
-  render();
 }
 
-async function saveBlobOnce(item, blob) {
+async function ensureDetection(item) {
+  const options = inspectOptions();
+  if (item.detection && item.autoDetectStatus === 'ready' && sameBatchInspectOptions(item.inspectOptions, options)) return item.detection;
+  item.phase = 'Detecting'; item.progress = 0; render();
+  const result = await analyzeBatchItem(item, options, { preview: false });
+  item.detection = result.detection || null;
+  item.preview = result.preview || item.preview;
+  item.inspectOptions = { ...options };
+  item.autoDetectStatus = 'ready';
+  item.autoDetectProgress = 1;
+  return item.detection;
+}
+
+async function saveOutput(item, blob) {
+  revokeItemOutput(item);
   item.outputName = batchOutputName(item.file.name, els.batchNameMode?.value || 'cleaned');
   if (state.outputDirectory) {
     const handle = await state.outputDirectory.getFileHandle(item.outputName, { create: true });
     const writable = await handle.createWritable();
-    try { await writable.write(blob); }
-    catch (error) {
-      try { await writable.abort?.(); } catch {}
-      throw error;
-    }
-    finally { try { await writable.close(); } catch {} }
+    await writable.write(blob);
+    await writable.close();
     item.status = BATCH_STATUSES.SAVED;
   } else {
-    if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
     item.outputUrl = URL.createObjectURL(blob);
     item.status = BATCH_STATUSES.DONE;
   }
 }
-async function saveBlob(item, blob) {
-  let retriesUsed = 0;
-  while (true) {
-    try { return await saveBlobOnce(item, blob); }
-    catch (error) {
-      if (!shouldRetryBatchWorkerError(error, retriesUsed, 1)) throw error;
-      retriesUsed += 1;
-      item.phase = 'Retrying save';
+
+async function processBatchItem(item) {
+  item.status = BATCH_STATUSES.PROCESSING;
+  item.error = '';
+  item.progress = 0;
+  item.phase = 'Preparing';
+  render();
+  const detection = await ensureDetection(item);
+  if (!detection?.position) throw new Error(detection?.blockedReason || detection?.reason || 'Watermark not detected');
+  const options = processOptions(detection);
+  const maxAttempts = BATCH_WORKER_MAX_RETRIES + 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    if (state.cancelled) throw new DOMException('Cancelled', 'AbortError');
+    const worker = new Worker(new URL('./video/worker.js', import.meta.url), { type: 'module' });
+    state.activeWorker = worker;
+    try {
+      const blob = await new Promise((resolve, reject) => {
+        let settled = false;
+        worker.onmessage = (event) => {
+          const data = event.data || {};
+          if (data.type === 'progress') {
+            item.progress = Number(data.progress) || 0;
+            item.phase = data.phase || 'Processing';
+            render();
+            return;
+          }
+          if (data.type === 'result') { settled = true; resolve(data.blob); return; }
+          if (data.type === 'error') { settled = true; reject(new Error(data.message || 'Processing failed')); }
+        };
+        worker.onerror = (event) => { if (!settled) reject(new Error(event.message || 'Worker failed')); };
+        worker.postMessage({ type: 'process', file: item.file, options });
+      });
+      await saveOutput(item, blob);
+      item.progress = 1;
+      item.phase = item.status === BATCH_STATUSES.SAVED ? 'Saved' : 'Ready';
       render();
-      await wait(batchWorkerRetryDelayMs(retriesUsed));
+      return;
+    } catch (error) {
+      const retryable = shouldRetryBatchWorkerError(error) && attempt < maxAttempts && !state.cancelled;
+      if (!retryable) throw error;
+      item.phase = `Worker retry ${attempt}/${BATCH_WORKER_MAX_RETRIES}`;
+      render();
+      await wait(batchWorkerRetryDelayMs(attempt));
+    } finally {
+      worker.terminate();
+      if (state.activeWorker === worker) state.activeWorker = null;
     }
   }
-}
-
-async function processOne(item) {
-  item.status = BATCH_STATUSES.PROCESSING; item.phase = 'Preparing'; item.progress = 0.01; item.error = ''; render();
-  const currentInspectOptions = inspectOptions();
-  if (!item.detection || !sameBatchInspectOptions(item.inspectOptions, currentInspectOptions)) {
-    item.phase = 'Detecting';
-    const inspected = await runWorker('inspect', item.file, currentInspectOptions, (message) => { item.phase = message.status || 'Detecting'; item.progress = Math.min(0.28, 0.28 * (message.progress ?? 0)); render(); });
-    item.detection = inspected.result?.detection || null;
-    item.preview = inspected.result?.preview || null;
-    item.inspectOptions = { ...currentInspectOptions };
-    item.autoDetectStatus = 'ready';
-  } else {
-    item.phase = 'Using cached auto-detect';
-    item.progress = 0.28;
-    render();
-  }
-  const minConfidence = settingNumber('minConfidence', 0.12);
-  if (!item.detection?.detected && !settingChecked('forceCleanup', false)) throw new Error(`Detection confidence ${(item.detection?.confidence ?? 0).toFixed(3)} is below ${minConfidence.toFixed(3)}`);
-  item.phase = 'Cleaning'; item.progress = 0.30; render();
-  const processed = await runWorker('process', item.file, processOptions(item.detection), (message) => { item.phase = message.status || 'Cleaning'; item.progress = 0.30 + 0.68 * Math.max(0, Math.min(1, message.progress ?? 0)); render(); });
-  item.phase = state.outputDirectory ? 'Saving' : 'Ready'; item.progress = 0.99; render();
-  await saveBlob(item, new Blob([processed.buffer], { type: 'video/mp4' }));
-  item.progress = 1; item.phase = item.status === BATCH_STATUSES.SAVED ? 'Saved' : 'Ready'; render();
 }
 
 async function runBatch() {
   if (state.running || state.ingesting || state.previewAnalyzing) return;
-  const queue = runnableBatchItems(state.items);
-  if (!queue.length) return;
   state.running = true;
   state.cancelled = false;
   state.rerunRequested = false;
   render();
-  for (const item of queue) {
-    if (state.cancelled) { if (item.status === BATCH_STATUSES.QUEUED) item.status = BATCH_STATUSES.CANCELLED; continue; }
-    try { await processOne(item); }
-    catch (error) {
-      item.status = error?.name === 'AbortError' ? BATCH_STATUSES.CANCELLED : BATCH_STATUSES.ERROR;
-      item.error = error?.message || String(error);
-      item.phase = item.status === BATCH_STATUSES.CANCELLED ? 'Cancelled' : 'Error';
-      render();
+  try {
+    for (const item of runnableBatchItems(state.items)) {
+      if (state.cancelled) break;
+      try {
+        await processBatchItem(item);
+      } catch (error) {
+        if (state.cancelled || error?.name === 'AbortError') {
+          item.status = BATCH_STATUSES.CANCELLED;
+          item.phase = 'Cancelled';
+        } else {
+          item.status = BATCH_STATUSES.ERROR;
+          item.error = error?.message || 'Processing failed';
+          item.phase = 'Error';
+        }
+        render();
+      }
     }
-    if (state.rerunRequested && !state.cancelled) break;
+  } finally {
+    state.running = false;
+    state.activeWorker = null;
+    render();
+    if (!state.cancelled && state.rerunRequested && runnableBatchItems(state.items).length) setTimeout(() => runBatch(), 0);
   }
-  const resumeQueuedRetry = state.rerunRequested && !state.cancelled;
-  state.running = false;
-  state.rerunRequested = false;
+}
+
+function cancelBatch() {
+  if (!state.running && !state.previewAnalyzing) return;
+  state.cancelled = true;
+  state.activeWorker?.terminate?.();
+  state.activeWorker = null;
+  for (const item of state.items) {
+    if (item.status === BATCH_STATUSES.PROCESSING) {
+      item.status = BATCH_STATUSES.CANCELLED;
+      item.phase = 'Cancelled';
+    }
+  }
   render();
-  if (resumeQueuedRetry) setTimeout(() => runBatch(), 0);
 }
 
-async function chooseOutputFolder() {
-  if (!window.showDirectoryPicker) { alert('Folder saving requires a Chromium browser with File System Access API support. You can still process the queue and download each result.'); return; }
-  try { state.outputDirectory = await window.showDirectoryPicker({ mode: 'readwrite' }); els.batchOutputFolderName.textContent = state.outputDirectory.name || 'Selected folder'; }
-  catch (error) { if (error?.name !== 'AbortError') alert(error?.message || 'Could not open output folder'); }
-}
-
-els.chooseBatchBtn?.addEventListener('click', () => { if (!state.running && !state.ingesting && !state.previewAnalyzing) { els.batchInput.value = ''; els.batchInput.click(); } });
-els.batchInput?.addEventListener('change', () => {
-  const selected = Array.from(els.batchInput.files || []);
-  els.batchInput.value = '';
-  if (!selected.length) return;
-  setTimeout(() => addFilesDeferred(selected), 0);
+els.chooseBatchBtn?.addEventListener('click', () => els.batchInput?.click());
+els.batchInput?.addEventListener('change', (event) => {
+  const files = Array.from(event.target.files || []);
+  event.target.value = '';
+  setTimeout(() => addFilesDeferred(files), 0);
 });
 els.batchCleanAllBtn?.addEventListener('click', runBatch);
-els.batchCancelBtn?.addEventListener('click', () => {
-  state.cancelled = true;
-  state.rerunRequested = false;
-  state.activeWorker?.postMessage({ type: 'cancel' });
+els.batchCancelBtn?.addEventListener('click', cancelBatch);
+els.batchOutputFolderBtn?.addEventListener('click', pickOutputFolder);
+els.batchNameMode?.addEventListener('change', () => {
+  for (const item of state.items) item.outputName = batchOutputName(item.file.name, els.batchNameMode?.value || 'cleaned');
+  render();
 });
-els.batchOutputFolderBtn?.addEventListener('click', chooseOutputFolder);
-els.batchNameMode?.addEventListener('change', () => { for (const item of state.items) item.outputName = batchOutputName(item.file.name, els.batchNameMode.value); render(); });
-window.addEventListener('beforeunload', () => {
-  for (const item of state.items) if (item.outputUrl) URL.revokeObjectURL(item.outputUrl);
-  disposeBatchWorker();
-});
+
 render();
