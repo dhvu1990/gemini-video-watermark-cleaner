@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPersistentContourSilhouetteDissolve } from '../src/video/persistentContourSilhouetteDissolve.js';
+import { applyPersistentContourSilhouetteDissolve } from '../src/video/persistentContourSilhouetteDissolveCore.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
@@ -32,6 +32,9 @@ function syntheticSmoothContourScene({ width = 80, height = 80, crossingLine = f
   return { image: { width, height, data }, alpha };
 }
 
+// This fixture is a regression test for the v1.0.126 contour-core fallback.
+// Later wrapper stages (background reconstruction / final quality rollback)
+// deliberately have different acceptance semantics and are tested separately.
 const fallbackFixtureOptions = {
   detectionConfidence: 0.90,
   minScore: 0.10,
