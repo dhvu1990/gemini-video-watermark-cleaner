@@ -5,9 +5,10 @@ import fs from 'node:fs';
 const batchUi = fs.readFileSync(new URL('../src/batch-ui.js', import.meta.url), 'utf8');
 
 test('batch picker snapshots FileList, clears the native input, then defers ingestion', () => {
-  assert.match(batchUi, /const selected = Array\.from\(els\.batchInput\.files \|\| \[\]\)/);
-  assert.match(batchUi, /els\.batchInput\.value = ''/);
-  assert.match(batchUi, /setTimeout\(\(\) => addFilesDeferred\(selected\), 0\)/);
+  assert.match(batchUi, /addEventListener\('change', \(event\) =>/);
+  assert.match(batchUi, /const files = Array\.from\(event\.target\.files \|\| \[\]\)/);
+  assert.match(batchUi, /event\.target\.value = ''/);
+  assert.match(batchUi, /setTimeout\(\(\) => addFilesDeferred\(files\), 0\)/);
 });
 
 test('large selections are ingested in yielded chunks instead of one blocking task', () => {

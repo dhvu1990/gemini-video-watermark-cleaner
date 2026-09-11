@@ -18,6 +18,20 @@ export function batchOutputName(fileName, mode = 'cleaned') {
   return `${base}-cleaned.mp4`;
 }
 
+export function naturalBatchFileCompare(a, b) {
+  const nameA = String(a?.name || '');
+  const nameB = String(b?.name || '');
+  const byName = nameA.localeCompare(nameB, undefined, { numeric: true, sensitivity: 'base' });
+  if (byName) return byName;
+  const bySize = (Number(a?.size) || 0) - (Number(b?.size) || 0);
+  if (bySize) return bySize;
+  return (Number(a?.lastModified) || 0) - (Number(b?.lastModified) || 0);
+}
+
+export function sortBatchFiles(files = []) {
+  return Array.from(files || []).sort(naturalBatchFileCompare);
+}
+
 export function isRunnableBatchStatus(status) {
   return status === BATCH_STATUSES.QUEUED || status === BATCH_STATUSES.ERROR || status === BATCH_STATUSES.CANCELLED;
 }

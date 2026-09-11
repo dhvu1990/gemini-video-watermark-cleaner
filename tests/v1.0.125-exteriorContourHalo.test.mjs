@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyPersistentContourSilhouetteDissolve } from '../src/video/persistentContourSilhouetteDissolve.js';
+import { applyPersistentContourSilhouetteDissolve } from '../src/video/persistentContourSilhouetteDissolveCore.js';
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 function lumaAt(image, x, y) {
@@ -88,9 +88,9 @@ function ringError(image, ringMask) {
   return count ? sum / count : 0;
 }
 
-// This historical v1.0.125 fixture is intentionally permissive. Keep later
-// v1.0.126/v1.0.127 gates from changing what this test is measuring: exterior
-// halo correction and per-pixel scene-line protection.
+// This historical v1.0.125 fixture intentionally targets the contour core.
+// Later wrapper stages (v1.0.127+) must not redefine what this regression is
+// measuring: exterior halo correction and per-pixel scene-line protection.
 const permissive = {
   minScore: 0.12,
   minDensity: 0.004,
@@ -157,7 +157,7 @@ test('v1.0.125 keeps a real crossing scene line guarded while correcting the ext
     outerBandScale: 0.92,
     hardSceneGuard: 0.48,
     // The historical assertion is about the local scene guard. Prevent the
-    // newer global scene classifier from short-circuiting that local test.
+    // global scene classifier from short-circuiting that local test.
     sceneEdgeOptions: { highScore: 2, mediumScore: 2 }
   });
   const diag = result.persistentContourSilhouetteDissolve;

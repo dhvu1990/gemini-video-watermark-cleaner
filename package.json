@@ -1,6 +1,6 @@
 {
   "name": "gemini-video-watermark-cleaner",
-  "version": "1.0.129",
+  "version": "1.0.130",
   "private": true,
   "type": "module",
   "description": "Local-first browser tool for cleaning visible Gemini/Veo video watermark overlays with motion-aligned temporal background reconstruction, boundary-aware spatial reconstruction, axis-adaptive seam finishing, guarded donor repair, scene-edge protection, preview/export calibration parity and rollback-safe cleanup.",

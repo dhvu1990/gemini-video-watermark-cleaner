@@ -2,6 +2,7 @@ import { applyPersistentContourSilhouetteDissolve as applyPersistentContourCore 
 import { applyHighConfidenceBodyResidualRescue } from './highConfidenceBodyResidualRescue.js';
 import { applyBoundaryAwareBackgroundReconstruction } from './boundaryBackgroundReconstruction.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
+import { evaluateSmoothRebuildArtifactGuard } from './smoothRebuildArtifactGuard.js';
 
 function finite(value, fallback = 0) {
   const number = Number(value);
@@ -28,24 +29,40 @@ function cloneImage(image) {
 }
 
 export function applyPersistentContourSilhouetteDissolve(image, alphaMap, options = {}) {
-  const core = applyPersistentContourCore(image, alphaMap, options);
+  // Detection confidence answers "is this the expected watermark?". It must not
+  // make restoration stronger. v1.0.130 deliberately runs every accepted
+  // detection through the same conservative cleanup-confidence profile that
+  // matched the safer medium-confidence real-world scenes.
+  //
+  // Preserve the historical low-confidence safety gate: a detection that would
+  // have been blocked before v1.0.130 must never be promoted merely because the
+  // cleanup profile itself is fixed at 0.55.
+  const observedDetectionConfidence = finite(options.detectionConfidence, 0);
+  const cleanupConfidence = Math.max(0.40, Math.min(0.64, finite(options.cleanupConfidence, 0.55)));
+  const lowConfidenceCutoff = Math.max(0.05, Math.min(0.80, finite(options.lowConfidenceCutoff, 0.40)));
+  const coreDetectionConfidence = observedDetectionConfidence < lowConfidenceCutoff
+    ? observedDetectionConfidence
+    : cleanupConfidence;
+  const cleanupOptions = { ...options, detectionConfidence: coreDetectionConfidence };
+
+  const core = applyPersistentContourCore(image, alphaMap, cleanupOptions);
   const coreDiagnostics = core.persistentContourSilhouetteDissolve || null;
   if (!coreDiagnostics) return core;
 
   let selected = cloneImage(core);
   const preBodyRemainingStrong = coreDiagnostics.remainingStrong === true;
-  const detectionConfidence = finite(
-    coreDiagnostics.confidencePolicy?.confidence,
-    finite(options.detectionConfidence, 0)
-  );
 
+  // The v1.0.127 high-confidence body pass is now opt-in only. Fresh v1.0.129
+  // validation showed that the broad body reconstruction can create a dark/brown
+  // blotch on textured scenes even when localization confidence is 0.9+.
+  const bodyOptIn = options.highConfidenceBodyResidualRescue === true;
   const bodyResult = applyHighConfidenceBodyResidualRescue(
     selected,
     alphaMap,
     {
-      enabled: options.highConfidenceBodyResidualRescue !== false,
-      trigger: preBodyRemainingStrong,
-      detectionConfidence,
+      enabled: bodyOptIn,
+      trigger: bodyOptIn && preBodyRemainingStrong,
+      detectionConfidence: observedDetectionConfidence,
       sceneEdgeOptions: options.sceneEdgeOptions || {},
       ...(options.highConfidenceBodyResidualOptions || {})
     }
@@ -54,9 +71,8 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   const bodyResidualAccepted = Boolean(bodyResidualRescue?.accepted);
   if (bodyResidualAccepted) selected = cloneImage(bodyResult);
 
-  // Background reconstruction has its own independent scene-risk gate. Do not
-  // inherit legacy/tuning overrides used by contour tests: reconstructing the
-  // full watermark body must remain conservative around genuine crossing edges.
+  // Background reconstruction keeps actual confidence only as a detector gate.
+  // Its restoration strength receives the fixed conservative cleanup profile.
   const backgroundSceneRisk = measureCrossingSceneEdgeRisk(
     selected,
     alphaMap,
@@ -64,7 +80,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   );
   const backgroundSceneSafe = !backgroundSceneRisk.protect && backgroundSceneRisk.level !== 'high';
   const backgroundTrigger = options.backgroundReconstruction !== false
-    && detectionConfidence >= finite(options.backgroundReconstructionMinConfidence, 0.50)
+    && observedDetectionConfidence >= finite(options.backgroundReconstructionMinConfidence, 0.50)
     && backgroundSceneSafe
     && Boolean(
       coreDiagnostics.attempted
@@ -77,7 +93,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
     alphaMap,
     {
       enabled: backgroundTrigger,
-      detectionConfidence,
+      detectionConfidence: cleanupConfidence,
       sceneEdgeOptions: options.sceneEdgeOptions || {},
       ...(options.backgroundReconstructionOptions || {})
     }
@@ -87,35 +103,62 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   if (backgroundAccepted) selected = cloneImage(backgroundResult);
 
   const coreAccepted = Boolean(coreDiagnostics.accepted);
-  const anyAccepted = coreAccepted || bodyResidualAccepted || backgroundAccepted;
-  const afterOutline = bodyResidualAccepted
+  const candidateAccepted = coreAccepted || bodyResidualAccepted || backgroundAccepted;
+
+  // Physical image-quality guard for the complete late reconstruction chain.
+  // Residual-score checks are intentionally disabled here: this gate only asks
+  // whether the candidate introduced destructive darkening or collapsed scene
+  // structure. If it did, roll the whole late chain back to its input.
+  const postChainArtifactGuard = evaluateSmoothRebuildArtifactGuard(
+    image,
+    selected,
+    alphaMap,
+    {
+      residualChecksEnabled: false,
+      ...(options.postChainArtifactGuardOptions || {})
+    }
+  );
+  const qualityRollback = candidateAccepted && postChainArtifactGuard.rollback;
+  if (qualityRollback) selected = cloneImage(image);
+  const anyAccepted = candidateAccepted && !qualityRollback;
+
+  const candidateAfterOutline = bodyResidualAccepted
     ? (bodyResidualRescue.afterOutline || coreDiagnostics.afterOutline)
     : coreDiagnostics.afterOutline;
-  const afterGlobal = backgroundAccepted
+  const candidateAfterGlobal = backgroundAccepted
     ? (backgroundReconstruction.afterResidual || bodyResidualRescue?.afterGlobal || coreDiagnostics.afterGlobal)
     : (bodyResidualAccepted
       ? (bodyResidualRescue.afterGlobal || coreDiagnostics.afterGlobal)
       : coreDiagnostics.afterGlobal);
+  const afterOutline = qualityRollback ? coreDiagnostics.beforeOutline : candidateAfterOutline;
+  const afterGlobal = qualityRollback ? coreDiagnostics.beforeGlobal : candidateAfterGlobal;
   const remainingStrong = strongOutline(afterOutline, options);
-  const correctedPixels = finite(coreDiagnostics.correctedPixels, 0)
+  const candidateCorrectedPixels = finite(coreDiagnostics.correctedPixels, 0)
     + (bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0)
     + (backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0);
+  const correctedPixels = qualityRollback ? 0 : candidateCorrectedPixels;
 
   // Preserve the historical acceptanceMode contract whenever the core pass
   // already accepted. New post-processing provenance is exposed separately.
-  const acceptanceMode = coreAccepted
-    ? coreDiagnostics.acceptanceMode
-    : (bodyResidualAccepted
-      ? 'high-confidence-body-residual'
-      : (backgroundAccepted ? 'boundary-background-reconstruction' : coreDiagnostics.acceptanceMode));
-  const postAcceptanceMode = backgroundAccepted
-    ? (bodyResidualAccepted ? 'body+background-reconstruction' : 'boundary-background-reconstruction')
-    : (bodyResidualAccepted ? 'high-confidence-body-residual' : acceptanceMode);
-  const reason = coreAccepted
-    ? coreDiagnostics.reason
+  const acceptanceMode = qualityRollback
+    ? 'quality-rollback'
+    : (coreAccepted
+      ? coreDiagnostics.acceptanceMode
+      : (bodyResidualAccepted
+        ? 'high-confidence-body-residual'
+        : (backgroundAccepted ? 'boundary-background-reconstruction' : coreDiagnostics.acceptanceMode)));
+  const postAcceptanceMode = qualityRollback
+    ? 'quality-rollback'
     : (backgroundAccepted
-      ? 'background-reconstruction-improvement'
-      : (bodyResidualAccepted ? 'body-residual-improvement' : coreDiagnostics.reason));
+      ? (bodyResidualAccepted ? 'body+background-reconstruction' : 'boundary-background-reconstruction')
+      : (bodyResidualAccepted ? 'high-confidence-body-residual' : acceptanceMode));
+  const reason = qualityRollback
+    ? `quality-rollback:${postChainArtifactGuard.reason}`
+    : (coreAccepted
+      ? coreDiagnostics.reason
+      : (backgroundAccepted
+        ? 'background-reconstruction-improvement'
+        : (bodyResidualAccepted ? 'body-residual-improvement' : coreDiagnostics.reason)));
 
   return {
     width: selected.width,
@@ -138,17 +181,25 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
         ? (finite(coreDiagnostics.beforeOutline.score, 0) - finite(afterOutline?.score, 0)) / finite(coreDiagnostics.beforeOutline.score, 1)
         : 0,
       correctedPixels,
+      candidateCorrectedPixels,
+      observedDetectionConfidence,
+      cleanupConfidence,
+      coreDetectionConfidence,
+      cleanupConfidenceDecoupled: true,
       preBodyRemainingStrong,
       remainingStrong,
-      bodyResidualAccepted,
-      bodyResidualCorrectedPixels: bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0,
+      bodyOptIn,
+      bodyResidualAccepted: qualityRollback ? false : bodyResidualAccepted,
+      bodyResidualCorrectedPixels: qualityRollback ? 0 : (bodyResidualAccepted ? finite(bodyResidualRescue.correctedPixels, 0) : 0),
       bodyResidualRescue,
       backgroundSceneRisk,
       backgroundSceneSafe,
       backgroundReconstructionTriggered: backgroundTrigger,
-      backgroundReconstructionAccepted: backgroundAccepted,
-      backgroundReconstructionCorrectedPixels: backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0,
-      backgroundReconstruction
+      backgroundReconstructionAccepted: qualityRollback ? false : backgroundAccepted,
+      backgroundReconstructionCorrectedPixels: qualityRollback ? 0 : (backgroundAccepted ? finite(backgroundReconstruction.correctedPixels, 0) : 0),
+      backgroundReconstruction,
+      qualityRollback,
+      postChainArtifactGuard
     }
   };
 }
