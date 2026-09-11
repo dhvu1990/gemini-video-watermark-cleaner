@@ -33,9 +33,17 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
   // make restoration stronger. v1.0.130 deliberately runs every accepted
   // detection through the same conservative cleanup-confidence profile that
   // matched the safer medium-confidence real-world scenes.
+  //
+  // Preserve the historical low-confidence safety gate: a detection that would
+  // have been blocked before v1.0.130 must never be promoted merely because the
+  // cleanup profile itself is fixed at 0.55.
   const observedDetectionConfidence = finite(options.detectionConfidence, 0);
   const cleanupConfidence = Math.max(0.40, Math.min(0.64, finite(options.cleanupConfidence, 0.55)));
-  const cleanupOptions = { ...options, detectionConfidence: cleanupConfidence };
+  const lowConfidenceCutoff = Math.max(0.05, Math.min(0.80, finite(options.lowConfidenceCutoff, 0.40)));
+  const coreDetectionConfidence = observedDetectionConfidence < lowConfidenceCutoff
+    ? observedDetectionConfidence
+    : cleanupConfidence;
+  const cleanupOptions = { ...options, detectionConfidence: coreDetectionConfidence };
 
   const core = applyPersistentContourCore(image, alphaMap, cleanupOptions);
   const coreDiagnostics = core.persistentContourSilhouetteDissolve || null;
@@ -176,6 +184,7 @@ export function applyPersistentContourSilhouetteDissolve(image, alphaMap, option
       candidateCorrectedPixels,
       observedDetectionConfidence,
       cleanupConfidence,
+      coreDetectionConfidence,
       cleanupConfidenceDecoupled: true,
       preBodyRemainingStrong,
       remainingStrong,
