@@ -121,7 +121,10 @@ test('v1.0.127 runtime wrapper runs body rescue only after the existing persiste
     new URL('../src/video/persistentContourSilhouetteDissolve.js', import.meta.url),
     'utf8'
   );
-  assert.match(wrapper, /applyPersistentContourCore\(image, alphaMap, options\)/);
+  // v1.0.130 deliberately inserts cleanupOptions between the observed detector
+  // confidence and the contour core. Keep this wiring assertion structural
+  // rather than requiring the old exact argument variable name.
+  assert.match(wrapper, /applyPersistentContourCore\(image, alphaMap, (?:options|cleanupOptions)\)/);
   assert.match(wrapper, /applyHighConfidenceBodyResidualRescue/);
   assert.match(wrapper, /preBodyRemainingStrong/);
   assert.match(wrapper, /bodyResidualAccepted/);
