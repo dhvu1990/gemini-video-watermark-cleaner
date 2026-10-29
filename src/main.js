@@ -101,7 +101,9 @@ for (const type of ['dragleave', 'drop']) els.dropZone.addEventListener(type, (e
 els.dropZone.addEventListener('drop', (event) => useFile(event.dataTransfer?.files?.[0]));
 els.analyzeBtn.addEventListener('click', () => { if (!file || busy) return; analysisSerial++; startFullAnalysis(); });
 els.cleanBtn.addEventListener('click', () => { if (!file || busy) return; resetOutputPreview(); activeTag = `process:${analysisSerial}`; setBusy(true); setStatus('Starting export…', 0.01); const detectedPosition = detection?.detection?.detected ? detection.detection.position : null; ensureWorker().postMessage({ type: 'process', tag: activeTag, file, options: { sampleCount: Number(els.sampleCount.value), minConfidence: Number(els.minConfidence.value), manual: els.manualMode.checked ? { x: Number(els.wmX.value), y: Number(els.wmY.value), size: Number(els.wmSize.value) } : null, detectedRegion: !els.manualMode.checked && detectedPosition ? { x: detectedPosition.x, y: detectedPosition.y, size: detectedPosition.width } : null, candidateId: els.manualMode.checked
-        ? (els.watermarkType.value === 'veo-wordmark' ? 'veo-wordmark-manual' : 'gemini-diamond-manual')
+        ? (els.watermarkType.value === 'auto'
+          ? detection?.detection?.candidateId
+          : (els.watermarkType.value === 'veo-wordmark' ? 'veo-wordmark-manual' : 'gemini-diamond-manual'))
         : detection?.detection?.candidateId, alphaGain: Number(els.alphaGain.value), adaptiveAlpha: els.adaptiveAlpha.checked, temporalStabilize: els.temporalStabilize.checked, edgePolish: Number(els.edgePolish.value), forceCleanup: els.forceCleanup.checked, lowGate: Number(els.lowGate.value), bitrate: Number(els.bitrate.value) * 1_000_000 } }); });
 els.cancelBtn.addEventListener('click', () => { worker?.postMessage({ type: 'cancel' }); setStatus('Cancelling…'); });
 window.addEventListener('beforeunload', () => { if (outputUrl) URL.revokeObjectURL(outputUrl); if (previewUrl) URL.revokeObjectURL(previewUrl); resetWorker(); });
