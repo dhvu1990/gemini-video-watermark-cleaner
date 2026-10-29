@@ -35,6 +35,7 @@ function processOptions(detection) {
     sampleCount: settingNumber('sampleCount', 12),
     minConfidence: settingNumber('minConfidence', 0.12),
     detectedRegion,
+    candidateId: detection?.candidateId || null,
     alphaGain: settingNumber('alphaGain', 1),
     adaptiveAlpha: settingChecked('adaptiveAlpha', true),
     temporalStabilize: settingChecked('temporalStabilize', true),

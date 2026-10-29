@@ -1,4 +1,5 @@
 import { resolveVideoWatermarkCandidates } from './catalog.js';
+import { buildVeoWordmarkAlphaMap, resolveVeoWordmarkCandidates } from './veoWordmark.js';
 import { getVideoAlphaMap, setActiveAlphaCalibration } from './alpha.js';
 import { calibrateAlphaShape } from './calibration.js';
 import { measureCrossingSceneEdgeRisk } from './sceneEdgeProtection.js';
@@ -316,6 +317,87 @@ export function evaluateDetectionSafety({ confidence, minConfidence = 0.12, refi
   };
 }
 
+
+/**
+ * The small text wordmark has a different footprint from Gemini's diamond.
+ * Search only narrow lower-corner anchors, then require a repeated glyph match
+ * across independent source frames. Never relax the legacy diamond safety bar.
+ */
+export async function detectVeoWordmarkFromFrames({ frames, width, height, minConfidence = 0.12 } = {}) {
+  if (!frames?.length || frames.length < 2) return null;
+  const candidates = resolveVeoWordmarkCandidates(width, height);
+  if (!candidates.length) return null;
+  const probes = frames.length <= 3
+    ? frames
+    : [frames[0], frames[Math.floor(frames.length / 2)], frames[frames.length - 1]];
+  const maps = new Map();
+  const preliminary = [];
+  for (const candidate of candidates) {
+    if (!maps.has(candidate.size)) maps.set(candidate.size, buildVeoWordmarkAlphaMap(candidate.size));
+    const alphaMap = maps.get(candidate.size);
+    const scores = probes.map((frame) => scoreRegion(frame.imageData, candidate, alphaMap));
+    const summary = aggregate(scores);
+    preliminary.push({ candidate, alphaMap, scores, ...summary });
+  }
+  preliminary.sort((a, b) => b.confidence - a.confidence);
+  const refined = [];
+  for (const initial of preliminary.slice(0, 6)) {
+    const candidate = await refineCandidate(probes, initial, Math.max(4, Math.round(initial.candidate.size * 0.12)));
+    const scores = frames.map((frame) => scoreRegion(frame.imageData, candidate.candidate, candidate.alphaMap));
+    const summary = aggregate(scores);
+    refined.push({ ...candidate, scores, ...summary });
+  }
+  refined.sort((a, b) => b.confidence - a.confidence);
+  for (const matched of refined) {
+    const minimum = Math.max(0.36, clamp(minConfidence, 0.05, 0.80) + 0.15);
+    const supports = matched.scores.filter((score) => (
+      score.confidence >= minimum - 0.075
+      && score.spatial >= 0.16
+      && score.gradient >= 0.12
+    )).length;
+    const voteRatio = supports / matched.scores.length;
+    const meanSpatial = matched.scores.reduce((sum, score) => sum + score.spatial, 0) / matched.scores.length;
+    const meanGradient = matched.scores.reduce((sum, score) => sum + score.gradient, 0) / matched.scores.length;
+    if (matched.confidence < minimum
+      || voteRatio < 2 / 3
+      || meanSpatial < 0.18
+      || meanGradient < 0.15) continue;
+    const gains = frames
+      .filter((_, i) => matched.scores[i]?.confidence >= minimum - 0.10)
+      .map((frame) => estimateAlphaGain(frame.imageData, matched.candidate, matched.alphaMap));
+    const alphaGain = clamp(median(gains) ?? 1, 0.65, 1.35);
+    const position = {
+      x: matched.candidate.x, y: matched.candidate.y,
+      width: matched.candidate.size, height: matched.candidate.size
+    };
+    return {
+      detected: true, safeToClean: true,
+      reason: 'veo-wordmark-multi-frame-match',
+      detectionSource: 'veo-wordmark-corner-search',
+      candidateId: matched.candidate.id,
+      confidence: matched.confidence,
+      rawConfidence: matched.confidence,
+      maxConfidence: matched.maxConfidence,
+      voteRatio,
+      position,
+      alphaGain,
+      estimatedAlphaGain: alphaGain,
+      calibration: { profile: 'veo-wordmark', bodyGain: alphaGain },
+      safety: {
+        safe: true,
+        reason: 'repeated-text-signature',
+        supportingFrames: supports,
+        frameCount: matched.scores.length,
+        meanSpatial,
+        meanGradient
+      },
+      alphaMap: matched.alphaMap,
+      frameScores: matched.scores
+    };
+  }
+  return null;
+}
+
 export async function detectVideoWatermarkFromFrames({ frames, width, height, minConfidence = 0.12, edgePolish = 0.35 }) {
   const candidates = resolveVideoWatermarkCandidates(width, height);
   if (!frames?.length || !candidates.length) return { detected: false, safeToClean: false, confidence: 0, reason: 'no-frames-or-candidates' };
@@ -342,6 +424,15 @@ export async function detectVideoWatermarkFromFrames({ frames, width, height, mi
       confidenceGain: best.confidence - base.confidence
     }
   });
+
+  // Distinct white-text morphology: a confirmed wordmark must not be
+  // passed through the diamond alpha calibration/reconstruction chain.
+  const wordmark = await detectVeoWordmarkFromFrames({ frames, width, height, minConfidence });
+  if (wordmark && (
+    !anchoredSafetyProbe.safe
+    || wordmark.confidence >= best.confidence + 0.06
+    || (wordmark.confidence >= 0.55 && best.confidence < 0.47)
+  )) return wordmark;
 
   if (!anchoredSafetyProbe.safe || best.confidence < Math.max(minConfidence + 0.04, 0.18)) {
     const regional = await searchRegionalCandidate(frames, width, height, candidates);

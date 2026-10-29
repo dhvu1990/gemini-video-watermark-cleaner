@@ -59,6 +59,7 @@ function activateExportCalibration(options, calibration) {
   });
   return {
     ...options,
+    candidateId: options?.candidateId || calibration.candidateId || null,
     alphaGain: selectExportAlphaGain(options?.alphaGain, calibration.alphaGain, 1),
     detectionConfidence: Number.isFinite(calibration.confidence)
       ? calibration.confidence

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="color-scheme" content="dark light" />
-  <title>Gemini Video Watermark Cleaner v1.0.69</title>
+  <title>Gemini Video Watermark Cleaner v1.0.130</title>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
@@ -12,8 +12,13 @@
     <header class="hero">
       <p class="eyebrow">LOCAL-FIRST VIDEO TOOL</p>
       <h1>Gemini Video Watermark Cleaner</h1>
+      <div class="release-info" aria-label="Current version and watermark support">
+        <strong class="release-version" id="appVersion">VERSION 1.0.130</strong>
+        <span>Gemini diamond</span>
+        <span class="release-beta">Veo text (beta)</span>
+      </div>
       <p>Automatic multi-frame detection, streak-safe directional consensus texture repair, guarded shape-aligned ghost suppression, overwrite-safe download release, adaptive smooth-background reconstruction, safe empty-zone hard suppression, temporally stable mode selection, structured directional consensus reconstruction, structured residual ring suppression with micro-salvage, accurate final diagnostics, detail-preserving restoration, and local MP4 export.</p>
-      <div class="badges"><span>v1.0.69</span><span>Auto detect</span><span>Streak-safe texture consensus</span><span>Shape ghost suppression</span><span>Overwrite-safe download</span><span>Adaptive background</span><span>Empty-zone hard suppression</span><span>Structured consensus repair</span><span>Structured ring suppression</span><span>Structured micro salvage</span><span>Temporal mode stability</span><span>Accurate final diagnostics</span><span>Smooth rebuild</span><span>Structured fallback</span><span>Subpixel alpha</span><span>Residual buckets</span><span>Hybrid core/ring restore</span><span>Normal edge bridge</span><span>Dual-ring luma finish</span><span>Selective second pass</span><span>Multi-frame atlas</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
+      <div class="badges"><span>v1.0.130</span><span>Auto detect</span><span>Streak-safe texture consensus</span><span>Shape ghost suppression</span><span>Overwrite-safe download</span><span>Adaptive background</span><span>Empty-zone hard suppression</span><span>Structured consensus repair</span><span>Structured ring suppression</span><span>Structured micro salvage</span><span>Temporal mode stability</span><span>Accurate final diagnostics</span><span>Smooth rebuild</span><span>Structured fallback</span><span>Subpixel alpha</span><span>Residual buckets</span><span>Hybrid core/ring restore</span><span>Normal edge bridge</span><span>Dual-ring luma finish</span><span>Selective second pass</span><span>Multi-frame atlas</span><span>No upload</span><span>Web Worker</span><span>Result preview</span><span>Audio passthrough</span></div>
     </header>
 
     <section class="panel">
@@ -60,6 +65,14 @@
       <div class="panel">
         <h2>2. Tune</h2>
         <label class="check"><input id="manualMode" type="checkbox" /> Manual region override</label>
+        <label>Watermark type (manual override)
+          <select id="watermarkType">
+            <option value="auto">Automatic / detected type</option>
+            <option value="gemini-diamond">Gemini diamond</option>
+            <option value="veo-wordmark">Veo text (beta)</option>
+          </select>
+        </label>
+        <p class="muted manual-wordmark-note">For Veo text manual cleanup, align the square ROI around the wordmark. Inspect the exported result before use.</p>
         <div class="row triple">
           <label>X<input id="wmX" type="number" value="0" /></label>
           <label>Y<input id="wmY" type="number" value="0" /></label>
@@ -190,7 +203,7 @@
       <div class="preview-caption">CLEANED VIDEO — generated locally in this browser. Use the player to review before downloading.</div>
     </section>
 
-    <footer>Use only on media you own or are authorized to edit. This project targets visible overlays only and does not attempt to remove invisible provenance watermarks such as SynthID.</footer>
+    <footer><strong id="footerVersion">v1.0.130</strong> · Veo text support is a test release; check the cleaned preview before use. Use only on media you own or are authorized to edit. This project targets visible overlays only and does not attempt to remove invisible provenance watermarks such as SynthID.</footer>
   </main>
   <script type="module" src="/src/main.js"></script>
   <script type="module" src="/src/downloadGuard.js"></script>

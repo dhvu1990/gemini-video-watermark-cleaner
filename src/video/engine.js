@@ -12,6 +12,7 @@ import {
 } from 'mediabunny';
 import { detectVideoWatermarkFromFrames, estimateAlphaGain, scoreRegion } from './detect.js';
 import { getVideoAlphaMap } from './alpha.js';
+import { isVeoWordmarkCandidate, buildVeoWordmarkAlphaMap, repairVeoWordmarkPaddedRegion } from './veoWordmark.js';
 import { applyEdgePolish, inverseAlphaRestore, stabilizeCorrection, toImageDataLike } from './restore.js';
 import {
   applyPaddedTextureRepair,
@@ -221,7 +222,8 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
   const padded = cropImageData(frame.imageData, expanded);
   const history = frames.slice(0, index).map((item) => cropImageData(item.imageData, expanded)).slice(-MAX_ATLAS_HISTORY);
   const inner = { offsetX: expanded.offsetX, offsetY: expanded.offsetY, width: detection.position.width, height: detection.position.height };
-  const repaired = repairPaddedRegion(
+  const repair = isVeoWordmarkCandidate(detection.candidateId) ? repairVeoWordmarkPaddedRegion : repairPaddedRegion;
+  const repaired = repair(
     padded,
     inner,
     detection.alphaMap,
@@ -341,7 +343,10 @@ export async function cleanVideo(file, options = {}) {
   if (position.x < 0 || position.y < 0 || position.x + position.width > metadata.width || position.y + position.height > metadata.height) {
     input.dispose(); throw new Error('Watermark region is outside the video frame');
   }
-  const alphaMap = manual || detectedRegion ? await getVideoAlphaMap(position.width) : analysis.internalDetection.alphaMap;
+  const wordmark = isVeoWordmarkCandidate(options.candidateId || analysis?.internalDetection?.candidateId);
+  const alphaMap = manual || detectedRegion
+    ? (wordmark ? buildVeoWordmarkAlphaMap(position.width) : await getVideoAlphaMap(position.width))
+    : analysis.internalDetection.alphaMap;
   const requestedGain = Number.isFinite(options.alphaGain) ? options.alphaGain : (analysis?.internalDetection.alphaGain ?? 1);
   const detectionConfidence = manual
     ? 1
@@ -387,9 +392,10 @@ export async function cleanVideo(file, options = {}) {
           const shotDelta = meanRoiLumaDelta(original, previousTemporal?.original);
           const shotChanged = shotDelta >= (Number.isFinite(options.shotCutThreshold) ? options.shotCutThreshold : 34);
           if (shotChanged) { previousGain = Number.NaN; previousTemporal = null; history = []; }
-          const gain = frameGain(original, alphaMap, requestedGain, previousGain, options.adaptiveAlpha !== false, score);
+          const gain = wordmark ? requestedGain : frameGain(original, alphaMap, requestedGain, previousGain, options.adaptiveAlpha !== false, score);
           previousGain = gain;
-          const repaired = repairPaddedRegion(
+          const repair = wordmark ? repairVeoWordmarkPaddedRegion : repairPaddedRegion;
+          const repaired = repair(
             paddedOriginal,
             inner,
             alphaMap,
@@ -417,7 +423,7 @@ export async function cleanVideo(file, options = {}) {
             dualRingPixelsPeak = Math.max(dualRingPixelsPeak, repaired.dualRingFinish.correctedPixels);
             dualRingImprovementSum += repaired.dualRingFinish.improvement || 0;
           }
-          if (options.temporalStabilize !== false) processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.45);
+          if (!wordmark && options.temporalStabilize !== false) processed = stabilizeCorrection(original, processed, previousTemporal, alphaMap, 0.45);
           const finalPadded = pasteRegion(repaired.repairedPadded, processed, inner.offsetX, inner.offsetY);
           ctx.putImageData(toImageDataLike(finalPadded), expanded.x, expanded.y);
           previousTemporal = { original, processed, paddedOriginal };
