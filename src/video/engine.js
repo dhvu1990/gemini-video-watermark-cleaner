@@ -242,7 +242,8 @@ function createDetectionPreview(frames, detection, edgePolish = 0.35) {
     antiStreak: repaired.antiStreakDiagnostics,
     edgeBridge: repaired.edgeBridge,
     dualRingFinish: repaired.dualRingFinish,
-    structuredSmoothRescue: repaired.structuredSmoothRescue
+    structuredSmoothRescue: repaired.structuredSmoothRescue,
+    veoWordmark: repaired.veoWordmark || null
   };
 }
 
