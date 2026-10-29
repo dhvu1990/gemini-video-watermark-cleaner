@@ -97,3 +97,37 @@ test('v1.0.130 keeps Veo candidate type through single and batch exports', async
   assert.match(batch, /candidateId: detection\?\.candidateId \|\| null/);
   assert.match(worker, /candidateId: options\?\.candidateId \|\| calibration\.candidateId \|\| null/);
 });
+
+test('v1.0.131 compact Full HD wordmark anchor matches observed Veo geometry', () => {
+  const anchors = resolveVeoWordmarkCandidates(1920, 1080);
+  const matched = anchors.find((candidate) => (
+    candidate.id === 'veo-wordmark-right-compact-67-22-23'
+  ));
+  assert.ok(matched, 'operator Full HD glyph should be searched at its real size');
+  assert.deepEqual(
+    { x: matched.x, y: matched.y, size: matched.size },
+    { x: 1848, y: 1002, size: 67 }
+  );
+  assert.ok(anchors.some((candidate) => candidate.id === 'veo-wordmark-right-compact-60-22-23'));
+  assert.ok(anchors.some((candidate) => candidate.id.startsWith('veo-wordmark-right-90-')));
+});
+
+test('v1.0.131 Full HD Veo wordmark is detected without lowering the safety gate', async () => {
+  const width = 1920, height = 1080;
+  const anchor = resolveVeoWordmarkCandidates(width, height)
+    .find((candidate) => candidate.id === 'veo-wordmark-right-compact-67-22-23');
+  assert.ok(anchor);
+  const alpha = buildVeoWordmarkAlphaMap(anchor.size);
+  const frames = [0, 1, 2].map((timestamp) => ({
+    timestamp,
+    imageData: frame(width, height, anchor, alpha)
+  }));
+  const matched = await detectVeoWordmarkFromFrames({
+    frames, width, height, minConfidence: 0.12
+  });
+  assert.ok(matched?.detected, 'independent wordmark path should accept a repeated bottom-right glyph');
+  assert.ok(matched.confidence >= 0.36);
+  assert.equal(matched.safeToClean, true);
+  assert.ok(Math.abs(matched.position.x - anchor.x) <= 6);
+  assert.ok(Math.abs(matched.position.y - anchor.y) <= 6);
+});
