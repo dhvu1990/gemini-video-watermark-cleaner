@@ -24,7 +24,15 @@ function reset() { for (const field of Object.values(fields)) if (field) field.v
 function format(value, digits = 3) { return Number.isFinite(value) ? Number(value).toFixed(digits) : '-'; }
 function bool(value) { return typeof value === 'boolean' ? (value ? 'YES' : 'NO') : '-'; }
 function deriveImprovement(calibration, finalCleanup) { const reported = finalCleanup?.improvement; if (Number.isFinite(reported) && Math.abs(reported) > 1e-6) return reported; const before = Number(calibration?.residualScore); const after = Number(finalCleanup?.after?.total); if (!Number.isFinite(before) || before <= 1e-6 || !Number.isFinite(after)) return null; return Math.max(-1, Math.min(1, (before - after) / before)); }
-function syncVisibleVersion() { document.title = `Gemini Video Watermark Cleaner v${APP_VERSION}`; const firstBadge = document.querySelector('.badges span'); if (firstBadge) firstBadge.textContent = `v${APP_VERSION}`; }
+function syncVisibleVersion() {
+  document.title = `Gemini Video Watermark Cleaner v${APP_VERSION}`;
+  const firstBadge = document.querySelector('.badges span');
+  if (firstBadge) firstBadge.textContent = `v${APP_VERSION}`;
+  const prominent = document.getElementById('appVersion');
+  if (prominent) prominent.textContent = `VERSION ${APP_VERSION}`;
+  const footer = document.getElementById('footerVersion');
+  if (footer) footer.textContent = `v${APP_VERSION}`;
+}
 function assign(field, value) { if (field) field.value = value; }
 function render() {
   if (!result) return;
