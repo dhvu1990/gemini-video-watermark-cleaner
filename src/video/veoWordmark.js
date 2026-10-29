@@ -117,6 +117,39 @@ export function resolveVeoWordmarkCandidates(width, height) {
       }
     }
   }
+  // Additional compact family based on a real 1920x1080 Veo sample:
+  // the visible text is about 35x16 px, 22 px from the right and 23 px
+  // from the bottom. Keep the older projected candidates for compatibility.
+  // Use the shorter frame dimension so 1080px landscape and portrait video
+  // get the same reference text size instead of inflating it by 1080/720.
+  const compactScale = clamp(Math.min(width, height) / 1080, 0.5, 1.8);
+  const compactSizes = [...new Set([60, 67, 74].map(
+    (baseSize) => Math.max(20, Math.round(baseSize * compactScale))
+  ))];
+  for (const size of compactSizes) {
+    const glyphScale = size / REFERENCE_SIZE;
+    for (const side of ['right', 'left']) {
+      for (const marginX of [18, 22, 30]) {
+        for (const marginY of [16, 23, 32]) {
+          const horizontal = marginX * compactScale;
+          const bottom = marginY * compactScale;
+          const x = Math.round(side === 'right'
+            ? width - horizontal - (WORDMARK_X + WORDMARK_WIDTH) * glyphScale
+            : horizontal - WORDMARK_X * glyphScale);
+          const y = Math.round(height - bottom - (WORDMARK_Y + WORDMARK_HEIGHT) * glyphScale);
+          if (x < 0 || y < 0 || x + size > width || y + size > height) continue;
+          const key = [x, y, size].join(':');
+          if (seen.has(key)) continue;
+          seen.add(key);
+          result.push({
+            id: `veo-wordmark-${side}-compact-${size}-${marginX}-${marginY}`,
+            x, y, size, width: size, height: size,
+            priority: side === 'right' ? 0 : 1
+          });
+        }
+      }
+    }
+  }
   return result;
 }
 
