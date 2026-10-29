@@ -77,7 +77,7 @@ function renderDetection(result, { source = 'full' } = {}) {
   const confidence = Number(d?.confidence) || 0; const match = Math.round(confidence * 100); const label = humanizeCandidate(d?.candidateId || 'Gemini Veo'); if (d?.position) updateWatermarkBox(meta, d.position, !d.detected);
   if (d?.detected) { els.analysisSummary.textContent = `Auto-detected: ${watermarkKind} — ${label} (${match}% match)`; const bg = watermarkKind === 'Veo text'
     ? (preview?.veoWordmark?.accepted
-      ? ` Veo stroke+shadow reconstruction: ${preview.veoWordmark.correctedPixels} pixels (beta).`
+      ? ` Veo stroke+shadow reconstruction: ${preview.veoWordmark.correctedPixels} pixels (beta).${preview?.veoWordmark?.residualMicroFinish?.applied ? ` Residual micro-finish: ${preview.veoWordmark.residualMicroFinish.changedPixels} pixels.` : ''}`
       : ` Veo reconstruction withheld: ${preview?.veoWordmark?.reason || 'no-safe-repair'}.`)
     : (adaptiveBackground?.mode === 'empty-hard-rebuild' ? ' Safe empty-zone hard suppression enabled.' : (adaptiveBackground?.mode === 'smooth-rebuild' ? ' Smooth background rebuild enabled.' : ' Structured-background fallback.')); els.previewNote.textContent = (source === 'quick' ? `Quick scan accepted with ${QUICK_SAMPLE_COUNT} sampled frames.` : 'Full scan confirmed the watermark across multiple frames.') + bg; setStatus(`Detected: ${d.candidateId} confidence ${confidence.toFixed(3)}`, 1); }
   else { els.analysisSummary.textContent = `Possible watermark candidate (${match}% match)`; els.previewNote.textContent = 'Confidence is below the selected threshold. Review the box or use manual override.'; setStatus('No high-confidence watermark detected.', 1); }
