@@ -89,3 +89,11 @@ test('v1.0.130 visibly identifies the version and supports manual wordmark overr
   assert.match(calibrationUi, /prominent\.textContent = `VERSION \$\{APP_VERSION\}`/);
   assert.match(engine, /repair = wordmark \? repairVeoWordmarkPaddedRegion : repairPaddedRegion/);
 });
+
+test('v1.0.130 keeps Veo candidate type through single and batch exports', async () => {
+  const fs = await import('node:fs');
+  const worker = fs.readFileSync(new URL('../src/video/worker.js', import.meta.url), 'utf8');
+  const batch = fs.readFileSync(new URL('../src/batch-ui.js', import.meta.url), 'utf8');
+  assert.match(batch, /candidateId: detection\?\.candidateId \|\| null/);
+  assert.match(worker, /candidateId: options\?\.candidateId \|\| calibration\.candidateId \|\| null/);
+});
