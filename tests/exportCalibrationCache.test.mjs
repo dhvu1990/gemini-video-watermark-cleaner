@@ -79,5 +79,7 @@ test('worker caches inspect calibration and activates it before the detected-reg
   assert.match(worker, /setActiveAlphaCalibration\(size, calibration\.alphaMap/);
   assert.match(worker, /selectExportAlphaGain\(options\?\.alphaGain, calibration\.alphaGain, 1\)/);
   assert.match(worker, /finally \{\s*\/\/ Never let one same-sized video's refined alpha leak[\s\S]*clearActiveAlphaCalibration\(\)/);
-  assert.match(engine, /const alphaMap = manual \|\| detectedRegion \? await getVideoAlphaMap\(position\.width\) : analysis\.internalDetection\.alphaMap/);
+  assert.match(engine, /const wordmark = isVeoWordmarkCandidate\(options\.candidateId/);
+  assert.match(engine, /wordmark \? buildVeoWordmarkAlphaMap\(position\.width\) : await getVideoAlphaMap\(position\.width\)/);
+  assert.match(engine, /: analysis\.internalDetection\.alphaMap/);
 });
