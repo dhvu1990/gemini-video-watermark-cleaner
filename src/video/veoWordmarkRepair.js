@@ -1,6 +1,7 @@
 // Only the explicitly recognized visible Veo text uses this repair path.
 // Recover its white strokes AND dark outline; keep Gemini diamond untouched.
 import { cropRegion, embedAlphaMap, pasteRegion } from './textureRepair.js';
+import { applyVeoWordmarkResidualMicroFinish } from './veoWordmarkResidualFinish.js';
 
 const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
 const luma = (r, g, b) => r * 0.2126 + g * 0.7152 + b * 0.0722;
@@ -277,6 +278,14 @@ export function repairVeoWordmarkPaddedRegion(paddedOriginal, inner, alphaMap, g
           strokeSeeds: estimated.seedCount, strokeBands: estimated.bandCounts,
           sourceShift: reconstruction?.sourceShift || null
         };
+        // The first pass must be accepted and its exterior donor smooth enough.
+        // A second, strictly local pass may remove correlated bright glyph
+        // pinholes. It is independently gated and rolls back on scene risk.
+        if (accepted && background.fitMAE < 26) {
+          const micro = applyVeoWordmarkResidualMicroFinish(original, cleaned, bounds);
+          cleaned = micro.cleaned;
+          diagnostics.residualMicroFinish = micro.diagnostics;
+        }
       } else {
         diagnostics = {
           accepted: false, correctedPixels: 0, maskedPixels: 0,
