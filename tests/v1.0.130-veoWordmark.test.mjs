@@ -74,3 +74,18 @@ test('v1.0.130 dedicated repair never modifies a clean zero-alpha ROI', () => {
   assert.deepEqual(repaired.cleaned.data, original.data);
   assert.equal(repaired.veoWordmark.correctedPixels, 0);
 });
+
+test('v1.0.130 visibly identifies the version and supports manual wordmark override', async () => {
+  const fs = await import('node:fs');
+  const html = fs.readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const main = fs.readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+  const calibrationUi = fs.readFileSync(new URL('../src/calibration-ui.js', import.meta.url), 'utf8');
+  const engine = fs.readFileSync(new URL('../src/video/engine.js', import.meta.url), 'utf8');
+  assert.match(html, /id="appVersion"/);
+  assert.match(html, /id="footerVersion"/);
+  assert.match(html, /option value="veo-wordmark"/);
+  assert.match(main, /veo-wordmark-manual/);
+  assert.match(main, /watermarkType\.value === 'auto'/);
+  assert.match(calibrationUi, /prominent\.textContent = `VERSION \$\{APP_VERSION\}`/);
+  assert.match(engine, /repair = wordmark \? repairVeoWordmarkPaddedRegion : repairPaddedRegion/);
+});
